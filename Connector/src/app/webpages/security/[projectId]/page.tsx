@@ -5,12 +5,12 @@ import { useRouter, useParams } from 'next/navigation';
 import { LoadingScreen } from '@/components/loading-spinner';
 import { ExitIcon } from '@/components/log-in-out';
 import ThemeToggle from '@/components/theme-toggle';
-import RemediationRequest from '@/components/remediationrequest';
+import RemediationRequest from '@/components/remediation-request';
 
 import Findings from '../findings';
 import { useScan } from '@/lib/scan-context';
 import Monitor from '../monitor';
-import SecurityPopup, { type ProjectInfo } from '../Popup';
+import SecurityPopup, { type ProjectInfo } from '@/components/security-popup';
 
 export default function SecurityAnalysisPage() {
   const router = useRouter();
@@ -25,8 +25,9 @@ export default function SecurityAnalysisPage() {
   const [remediationOpen, setRemediationOpen] = useState(false);
   const [project, setProject] = useState<any>(null);
   const [loading, setLoading] = useState(true);
-  const [activePopup, setActivePopup] = useState<'clean' | 'remediated' | 'failed' | null>(null);
+  const [activePopup, setActivePopup] = useState<'clean' | 'remediated' | 'failed' | 'published' | null>(null);
   const [findingsReady, setFindingsReady] = useState(false);
+  const [publishedUrl, setPublishedUrl] = useState<string | null>(null);
 
   const remediating = remediationState === 'running';
   const remediationDone = remediationState === 'completed';
@@ -34,6 +35,15 @@ export default function SecurityAnalysisPage() {
   useEffect(() => {
     fetchProjectInfo();
     restoreState(projectId);
+
+    const stored = localStorage.getItem(`deplai_published_${projectId}`);
+    if (stored) {
+      try {
+        const data = JSON.parse(stored);
+        setPublishedUrl(data.url || '');
+        setActivePopup('published');
+      } catch {}
+    }
   }, [projectId]);
 
   useEffect(() => {
@@ -44,7 +54,9 @@ export default function SecurityAnalysisPage() {
 
   useEffect(() => {
     if (remediationDone && remediationResult) {
-      setActivePopup(remediationResult.success ? 'remediated' : 'failed');
+      setActivePopup(prev =>
+        prev === 'published' ? prev : remediationResult.success ? 'remediated' : 'failed'
+      );
     }
   }, [remediationDone, remediationResult]);
 
@@ -81,9 +93,31 @@ export default function SecurityAnalysisPage() {
     await startRemediation(projectId);
   }
 
+  function handlePublishComplete(url: string) {
+    localStorage.setItem(
+      `deplai_published_${projectId}`,
+      JSON.stringify({ url }),
+    );
+
+    const name = project?.name || project?.repo || scanProjectName || 'Unknown';
+    const isGitHub = project?.type !== 'local';
+    localStorage.setItem(
+      'deplai_pending_notification',
+      JSON.stringify({
+        type: 'success',
+        message: isGitHub
+          ? `Pull request created successfully for "${name}".`
+          : `GitHub repository created successfully for "${name}".`,
+      }),
+    );
+
+    router.push('/webpages');
+  }
+
   const popupScenario = useMemo(() => {
     if (activePopup === 'clean') return 'clean' as const;
     if (activePopup === 'failed') return 'failed' as const;
+    if (activePopup === 'published') return 'published' as const;
     if (activePopup === 'remediated') {
       return project?.type === 'local' ? 'local_remediated' as const : 'github_remediated' as const;
     }
@@ -102,7 +136,11 @@ export default function SecurityAnalysisPage() {
   const popupActive = popupScenario !== null;
 
   function handlePopupClose() {
-    setActivePopup(null);
+    if (activePopup === 'clean' || activePopup === 'published') {
+      router.push('/webpages');
+    } else {
+      setActivePopup(null);
+    }
   }
 
   if (loading) {
@@ -161,7 +199,9 @@ export default function SecurityAnalysisPage() {
               projectName={project?.name || project?.repo || scanProjectName || 'Unknown'}
               project={popupProject}
               onClose={handlePopupClose}
+              onPublishComplete={handlePublishComplete}
               remediationResult={remediationResult}
+              publishedUrl={publishedUrl}
             />
           </div>
         )}

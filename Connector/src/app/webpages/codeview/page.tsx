@@ -9,7 +9,7 @@ import ChatIcon from '@/components/chat-icon';
 import ChatInterface from './chat-interface';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
-import { PopupProvider, usePopup } from '@/components/popup';
+import { PopupProvider, usePopup } from '@/components/toast-notification';
 
 interface FileItem {
   name: string;
@@ -212,9 +212,9 @@ function RepositoryBrowserContent() {
 
   function buildNavigationUrl(path: string) {
     if (isLocal) {
-      return `/dashboard/codeview?project_id=${projectId}&type=local${path ? `&path=${path}` : ''}`;
+      return `/webpages/codeview?project_id=${projectId}&type=local${path ? `&path=${path}` : ''}`;
     } else {
-      return `/dashboard/codeview?owner=${owner}&repo=${repo}&type=github${path ? `&path=${path}` : ''}`;
+      return `/webpages/codeview?owner=${owner}&repo=${repo}&type=github${path ? `&path=${path}` : ''}`;
     }
   }
 
@@ -240,7 +240,7 @@ function RepositoryBrowserContent() {
       <div className="min-h-screen bg-header flex items-center justify-center">
         <div className="text-center">
           <p className="text-muted mb-4">No project selected</p>
-          <Link href="/dashboard" className="text-blue-600 dark:text-blue-400 hover:underline">
+          <Link href="/webpages" className="text-blue-600 dark:text-blue-400 hover:underline">
             Go to Dashboard
           </Link>
         </div>
@@ -254,7 +254,7 @@ function RepositoryBrowserContent() {
         <div className="container mx-auto px-6 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-3">
-              <Link href="/dashboard" className="flex items-center space-x-2">
+              <Link href="/webpages" className="flex items-center space-x-2">
                 <span className="text-xl font-bold text-foreground">
                   {chatOpen ? 'DeplAI' : 'Code View'}
                 </span>

@@ -6,10 +6,10 @@ import LoadingSpinner from '@/components/loading-spinner';
 import ProjectIcon from '@/components/project-icons';
 import { SearchIcon, FileXmarkIcon, FilterIcon } from '@/components/search-result';
 import { ArrowLeftCircle, ArrowRightCircle } from '@/components/pagination-arrows';
-import { FileFormatZip, AppConnector, DownloadIcon } from '@/components/panel-icons';
+import { FileFormatZip, AppConnector, CloudUploadIcon, XmarkCircleIcon } from '@/components/panel-icons';
 import ScanModal from '@/components/scan-card';
-import GradientText from '@/components/GradientText';
-import { usePopup } from '@/components/popup';
+import { GradientText } from '@/components/text-animation';
+import { usePopup } from '@/components/toast-notification';
 
 interface ProjectsProps {
   user: any;
@@ -57,6 +57,10 @@ export default function Projects({
   const [scanModalOpen, setScanModalOpen] = useState(false);
   const [selectedProject, setSelectedProject] = useState<any>(null);
 
+  const [deployMode, setDeployMode] = useState(false);
+  const [deploySelectedId, setDeploySelectedId] = useState<string | null>(null);
+  const [deployConfirmOpen, setDeployConfirmOpen] = useState(false);
+
   const handleScanClick = (project: any) => {
     setSelectedProject(project);
     setScanModalOpen(true);
@@ -69,6 +73,39 @@ export default function Projects({
     });
     startScan(result.projectId, result.projectName);
   };
+
+  const handleToggleDeployMode = () => {
+    if (deployMode) {
+      setDeployMode(false);
+      setDeploySelectedId(null);
+      setDeployConfirmOpen(false);
+    } else {
+      setDeployMode(true);
+    }
+  };
+
+  const handleDeploySelect = (projectId: string) => {
+    setDeploySelectedId((prev) => (prev === projectId ? null : projectId));
+  };
+
+  const handleReadyClick = () => {
+    setDeployConfirmOpen(true);
+  };
+
+  const handleDeployConfirmYes = () => {
+    setDeployConfirmOpen(false);
+  };
+
+  const handleDeployConfirmNo = () => {
+    setDeployConfirmOpen(false);
+  };
+
+  const getProjectName = (project: any) =>
+    project.type === 'local' ? project.name : project.repo;
+
+  const deploySelectedProject = deploySelectedId
+    ? projects.find((p) => p.id === deploySelectedId)
+    : null;
 
   const filteredProjects = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
@@ -134,7 +171,7 @@ export default function Projects({
           <div className="p-4">
             <div className="text-center py-12">
               <div className="w-16 h-16 bg-surface-hover rounded-full flex items-center justify-center mx-auto mb-4">
-                <DownloadIcon className="w-8 h-8 text-gray-400" />
+                <CloudUploadIcon className="w-8 h-8 text-gray-400" />
               </div>
               <p className="text-gray-600 dark:text-gray-300 font-medium mb-2">No installations yet</p>
               <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">Install the GitHub App to get started</p>
@@ -162,6 +199,8 @@ export default function Projects({
           className="hidden"
           disabled={uploading}
         />
+
+        {/* Upload Project */}
         <button
           onClick={() => fileInputRef.current?.click()}
           disabled={uploading}
@@ -182,6 +221,34 @@ export default function Projects({
           </div>
         </button>
 
+        {/* Deploy */}
+        <button
+          onClick={handleToggleDeployMode}
+          className={`w-full p-8 rounded-xl border transition-all duration-200 cursor-pointer group ${
+            deployMode
+              ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
+              : 'border-border hover:border-blue-400 dark:hover:border-blue-500 bg-surface hover:bg-blue-50 dark:hover:bg-blue-900/20'
+          }`}
+        >
+          <div className="flex flex-col items-center">
+            {deployMode ? (
+              <XmarkCircleIcon className="w-12 h-12 text-blue-500 dark:text-blue-400 transition-colors" />
+            ) : (
+              <CloudUploadIcon className="w-12 h-12 text-gray-400 dark:text-gray-500 group-hover:text-blue-500 dark:group-hover:text-blue-400 transition-colors" />
+            )}
+            <p
+              className={`mt-3 text-sm font-medium transition-colors ${
+                deployMode
+                  ? 'text-blue-600 dark:text-blue-400'
+                  : 'text-gray-600 dark:text-gray-300 group-hover:text-blue-600 dark:group-hover:text-blue-400'
+              }`}
+            >
+              {deployMode ? 'Exit Deploy Mode' : 'Deploy'}
+            </p>
+          </div>
+        </button>
+
+        {/* Connect to App */}
         <button
           onClick={handleConnectRepository}
           className="w-full p-8 rounded-xl border border-border hover:border-blue-400 dark:hover:border-blue-500 bg-surface hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-all duration-200 cursor-pointer group"
@@ -193,34 +260,6 @@ export default function Projects({
             </p>
           </div>
         </button>
-
-        <div className="bg-surface-alt rounded-xl border border-border">
-          <div className="p-4">
-            <div className="space-y-2">
-              {installations.map((inst) => (
-                <a
-                  key={inst.id}
-                  href={`https://github.com/${inst.account_login}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="block p-4 rounded-lg bg-surface-alt border-2 border-transparent cursor-pointer transition-all duration-200 hover:bg-[#fffafa] dark:hover:bg-surface-hover"
-                >
-                  <div className="flex items-center space-x-3">
-                    <img
-                      src={user?.avatarUrl || `https://github.com/${inst.account_login}.png`}
-                      alt={inst.account_login}
-                      className="w-10 h-10 rounded-full"
-                    />
-                    <div className="flex-1">
-                      <h3 className="font-semibold text-foreground">{inst.account_login}</h3>
-                      <p className="text-xs text-muted">{inst.account_type}</p>
-                    </div>
-                  </div>
-                </a>
-              ))}
-            </div>
-          </div>
-        </div>
       </div>
 
       <div className="lg:col-span-2">
@@ -294,111 +333,163 @@ export default function Projects({
               </div>
             ) : (
               <div className="space-y-4">
-                {paginatedProjects.map((project) => (
-                  <div
-                    key={project.id}
-                    className="group border border-border rounded-lg p-5 hover:border-blue-300 dark:hover:border-blue-600 hover:shadow-md transition-all duration-300 cursor-pointer bg-[#f8f8f8] dark:bg-[#262626]"
-                    onClick={() => handleProjectClick(project)}
-                  >
-                    <div className="flex items-start justify-between mb-4">
-                      <div className="flex items-center space-x-3">
-                        <ProjectIcon type={project.type} size={40} className="text-foreground self-center" />
-                        <div className="flex flex-col justify-center mt-1">
-                          <h3 className="font-semibold text-foreground">
-                            {project.type === 'local' ? project.name : project.repo}
-                          </h3>
-                          <span className={`text-xs mt-0.5 ${
-                            project.type === 'local'
-                              ? 'text-purple-700 dark:text-purple-300'
-                              : project.access === 'Private'
-                                ? 'text-red-600 dark:text-red-400'
-                                : 'text-green-700 dark:text-green-300'
-                          }`}>
-                            {project.type === 'local' ? 'Local' : project.access}
-                          </span>
-                        </div>
-                      </div>
+                {paginatedProjects.map((project) => {
+                  const isSelected = deploySelectedId === project.id;
 
-                      <div className="flex items-center space-x-2">
-                        {project.canDelete && (
-                          <button
-                            className="text-sm text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300 font-medium px-3 py-1 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleDeleteProject(project.id, project.name);
-                            }}
-                          >
-                            Delete
-                          </button>
-                        )}
-                        {activeRemediationIds.includes(project.id) ? (
-                          <GradientText
-                            colors={["#5227FF", "#FF9FFC", "#B19EEF"]}
-                            animationSpeed={8}
-                            showBorder={false}
-                            className="text-sm font-medium px-3 py-1 cursor-default"
-                          >
-                            Remediating
-                          </GradientText>
-                        ) : activeScanIds.includes(project.id) ? (
-                          <GradientText
-                            colors={["#5227FF", "#FF9FFC", "#B19EEF"]}
-                            animationSpeed={8}
-                            showBorder={false}
-                            className="text-sm font-medium px-3 py-1 cursor-default"
-                          >
-                            Scanning
-                          </GradientText>
-                        ) : (
-                          <button
-                            disabled={anyOperationActive}
-                            className={`text-sm font-medium px-3 py-1 rounded-lg transition ${
-                              anyOperationActive
-                                ? 'text-gray-400 dark:text-gray-600 cursor-not-allowed'
-                                : 'text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-900/30'
-                            }`}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleScanClick(project);
-                            }}
-                          >
-                            Scan
-                          </button>
-                        )}
-                      </div>
-                    </div>
-
-                    {project.type === 'github' && project.languages && Object.keys(project.languages).length > 0 && (
-                      <div className="flex flex-wrap gap-2 mt-3">
-                        {Object.keys(project.languages).slice(0, 5).map((lang) => (
-                          <span
-                            key={lang}
-                            className="text-xs bg-surface-hover text-foreground px-3 py-1 rounded-full"
-                          >
-                            {lang}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-
-                    <div className="grid grid-rows-[0fr] group-hover:grid-rows-[1fr] transition-all duration-300">
-                      <div className="overflow-hidden">
-                        <div className="mt-4 pt-4 border-t border-border">
-                          <div className="flex items-center justify-between text-sm">
-                            <span className="text-muted">Security Analysis:</span>
-                            <Link
-                              href={`/dashboard/security-analysis/${project.id}`}
-                              onClick={(e) => e.stopPropagation()}
-                              className="text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 font-medium hover:underline"
+                  return (
+                    <div
+                      key={project.id}
+                      className={`group border rounded-lg p-5 transition-all duration-300 bg-[#f8f8f8] dark:bg-[#262626] ${
+                        deployMode
+                          ? isSelected
+                            ? 'border-blue-400 dark:border-blue-500 shadow-md'
+                            : 'border-border'
+                          : 'border-border hover:border-blue-300 dark:hover:border-blue-600 hover:shadow-md cursor-pointer'
+                      }`}
+                      onClick={() => {
+                        if (deployMode) {
+                          handleDeploySelect(project.id);
+                        } else {
+                          handleProjectClick(project);
+                        }
+                      }}
+                    >
+                      <div className="flex items-center justify-between mb-4">
+                        <div className="flex items-center space-x-3">
+                          {/* Deploy mode: checkbox on the left */}
+                          {deployMode && (
+                            <div
+                              className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-colors flex-shrink-0 ${
+                                isSelected
+                                  ? 'border-blue-500 bg-blue-500'
+                                  : 'border-gray-300 dark:border-gray-600'
+                              }`}
                             >
-                              Results
-                            </Link>
+                              {isSelected && (
+                                <svg className="w-3 h-3 text-white" viewBox="0 0 12 12" fill="none">
+                                  <path d="M2 6L5 9L10 3" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                                </svg>
+                              )}
+                            </div>
+                          )}
+                          <ProjectIcon type={project.type} size={40} className="text-foreground self-center" />
+                          <div className="flex flex-col justify-center mt-1">
+                            <h3 className="font-semibold text-foreground">
+                              {project.type === 'local' ? project.name : project.repo}
+                            </h3>
+                            <span className={`text-xs mt-0.5 ${
+                              project.type === 'local'
+                                ? 'text-purple-700 dark:text-purple-300'
+                                : project.access === 'Private'
+                                  ? 'text-red-600 dark:text-red-400'
+                                  : 'text-green-700 dark:text-green-300'
+                            }`}>
+                              {project.type === 'local' ? 'Local' : project.access}
+                            </span>
                           </div>
                         </div>
+
+                        {/* Deploy mode: Ready button on the selected card */}
+                        {deployMode ? (
+                          isSelected ? (
+                            <button
+                              className="text-sm font-medium px-3 py-1 rounded-lg transition text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-900/30"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleReadyClick();
+                              }}
+                            >
+                              Ready
+                            </button>
+                          ) : null
+                        ) : (
+                          /* Normal mode: action buttons */
+                          <div className="flex items-center space-x-2">
+                            {project.canDelete && (
+                              <button
+                                className="text-sm text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300 font-medium px-3 py-1 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleDeleteProject(project.id, project.name);
+                                }}
+                              >
+                                Delete
+                              </button>
+                            )}
+                            {activeRemediationIds.includes(project.id) ? (
+                              <GradientText
+                                colors={["#5227FF", "#FF9FFC", "#B19EEF"]}
+                                animationSpeed={8}
+                                showBorder={false}
+                                className="text-sm font-medium px-3 py-1 cursor-default"
+                              >
+                                Remediating
+                              </GradientText>
+                            ) : activeScanIds.includes(project.id) ? (
+                              <GradientText
+                                colors={["#5227FF", "#FF9FFC", "#B19EEF"]}
+                                animationSpeed={8}
+                                showBorder={false}
+                                className="text-sm font-medium px-3 py-1 cursor-default"
+                              >
+                                Scanning
+                              </GradientText>
+                            ) : (
+                              <button
+                                disabled={anyOperationActive}
+                                className={`text-sm font-medium px-3 py-1 rounded-lg transition ${
+                                  anyOperationActive
+                                    ? 'text-gray-400 dark:text-gray-600 cursor-not-allowed'
+                                    : 'text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-900/30'
+                                }`}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleScanClick(project);
+                                }}
+                              >
+                                Scan
+                              </button>
+                            )}
+                          </div>
+                        )}
                       </div>
+
+                      {/* Languages — shown in both modes */}
+                      {project.type === 'github' && project.languages && Object.keys(project.languages).length > 0 && (
+                        <div className="flex flex-wrap gap-2 mt-3">
+                          {Object.keys(project.languages).slice(0, 5).map((lang) => (
+                            <span
+                              key={lang}
+                              className="text-xs bg-surface-hover text-foreground px-3 py-1 rounded-full"
+                            >
+                              {lang}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* Expandable security analysis — hidden in deploy mode */}
+                      {!deployMode && (
+                        <div className="grid grid-rows-[0fr] group-hover:grid-rows-[1fr] transition-all duration-300">
+                          <div className="overflow-hidden">
+                            <div className="mt-4 pt-4 border-t border-border">
+                              <div className="flex items-center justify-between text-sm">
+                                <span className="text-muted">Security Analysis:</span>
+                                <Link
+                                  href={`/webpages/security/${project.id}`}
+                                  onClick={(e) => e.stopPropagation()}
+                                  className="text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 font-medium hover:underline"
+                                >
+                                  Results
+                                </Link>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      )}
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
@@ -432,6 +523,7 @@ export default function Projects({
         </div>
       </div>
 
+      {/* Scan confirmation modal */}
       <ScanModal
         isOpen={scanModalOpen}
         onClose={() => {
@@ -441,6 +533,43 @@ export default function Projects({
         project={selectedProject}
         onScanComplete={handleScanComplete}
       />
+
+      {/* Deploy confirmation modal */}
+      {deployConfirmOpen && deploySelectedProject && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center font-sans">
+          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm transition-opacity" />
+          <div className="relative bg-white dark:bg-[#0a0a0a] rounded-xl shadow-2xl w-full max-w-[480px] mx-4 overflow-hidden flex flex-col animate-in fade-in zoom-in-95 duration-200">
+            <div className="p-8 pt-6">
+              <div className="flex flex-col items-center">
+                <CloudUploadIcon className="w-20 h-20 text-blue-600 dark:text-blue-500 mb-6" />
+
+                <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-3 text-center">
+                  Confirmation
+                </h3>
+
+                <p className="text-gray-600 dark:text-gray-400 text-center leading-relaxed mb-8">
+                  Ready to deploy &ldquo;{getProjectName(deploySelectedProject)}&rdquo;?
+                </p>
+
+                <div className="flex gap-4 w-full">
+                  <button
+                    onClick={handleDeployConfirmYes}
+                    className="flex-1 py-3 px-4 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-semibold rounded-lg transition shadow-sm"
+                  >
+                    Yes
+                  </button>
+                  <button
+                    onClick={handleDeployConfirmNo}
+                    className="flex-1 py-3 px-4 bg-gray-200 hover:bg-gray-300 dark:bg-[#141414] dark:hover:bg-[#222] text-gray-900 dark:text-white font-semibold rounded-lg transition"
+                  >
+                    No
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

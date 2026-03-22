@@ -19,5 +19,5 @@ the updated codebase and confirm the results are generated.
 
 RULES:
 - Run the scanner command FIRST, then read results.
-- Do NOT produce any markdown files (no verification.md).
+- Do NOT produce any markdown files.
 - If a scanner fails, report the error but continue with the other scanner.

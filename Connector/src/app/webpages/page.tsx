@@ -5,8 +5,8 @@ import { useRouter } from 'next/navigation';
 import LoadingSpinner from '@/components/loading-spinner';
 import { ExitIcon } from '@/components/log-in-out';
 import ThemeToggle from '@/components/theme-toggle';
-import Projects from './dashboardpages/projects';
-import { PopupProvider, usePopup } from '@/components/popup';
+import Projects from './dashboard/page';
+import { PopupProvider, usePopup } from '@/components/toast-notification';
 import { useScan } from '@/lib/scan-context';
 
 export default function Dashboard() {
@@ -32,6 +32,15 @@ function DashboardContent() {
 
   useEffect(() => {
     checkAuth();
+
+    const pending = localStorage.getItem('deplai_pending_notification');
+    if (pending) {
+      localStorage.removeItem('deplai_pending_notification');
+      try {
+        const data = JSON.parse(pending);
+        showPopup({ type: data.type || 'success', message: data.message });
+      } catch {}
+    }
   }, []);
 
   async function checkAuth() {
@@ -151,9 +160,9 @@ function DashboardContent() {
 
   function handleProjectClick(project: any) {
     if (project.type === 'local') {
-      router.push(`/dashboard/codeview?project_id=${project.id}&type=local`);
+      router.push(`/webpages/codeview?project_id=${project.id}&type=local`);
     } else {
-      router.push(`/dashboard/codeview?owner=${project.owner}&repo=${project.repo}&type=github`);
+      router.push(`/webpages/codeview?owner=${project.owner}&repo=${project.repo}&type=github`);
     }
   }
 
@@ -178,7 +187,20 @@ function DashboardContent() {
         <div className="container mx-auto px-6 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-3">
-              <span className="text-xl font-bold text-foreground">Dashboard</span>
+              {user?.avatarUrl && (
+                <a
+                  href={`https://github.com/${user.login}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title={user.login}
+                >
+                  <img
+                    src={user.avatarUrl}
+                    alt={user.login || 'User'}
+                    className="w-9 h-9 rounded-full hover:ring-2 hover:ring-blue-400 transition"
+                  />
+                </a>
+              )}
             </div>
 
             <div className="flex items-center space-x-2">

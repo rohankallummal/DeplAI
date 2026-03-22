@@ -7,7 +7,7 @@ import { LoadingScreen } from '@/components/loading-spinner';
 
 import Threads from '@/components/background-animation';
 import LogoLoop from '@/components/logo-loop';
-import LandingTextAnimation from '@/components/landing-text-animation';
+import { LandingTextAnimation } from '@/components/text-animation';
 import { SiGithub, SiNextdotjs, SiDocker, SiLangchain, SiPrisma, SiTailwindcss, SiPython } from 'react-icons/si';
 
 export default function Home() {
@@ -22,7 +22,7 @@ export default function Home() {
       const session = await res.json();
 
       if (session.isLoggedIn) {
-        router.replace('/dashboard');
+        router.replace('/webpages');
         return;
       }
     } catch (error) {

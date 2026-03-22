@@ -46,7 +46,7 @@ export default function RemediationRequest({ isOpen, onClose, onContinue }: Reme
             </h3>
 
             <p className="text-gray-600 dark:text-gray-400 text-center leading-relaxed mb-8">
-              Fix detected security vulnerabilities with Agent417
+              Fix detected security vulnerabilities
             </p>
 
             <button

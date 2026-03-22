@@ -12,10 +12,8 @@ Show the directory tree. List what files exist and where.
 ## Important Files
 Identify and describe:
 - Entry points (main files, index files, app configs)
-- Configuration files (package.json, requirements.txt, tsconfig, etc.)
 - Route definitions and API endpoints
 - Middleware and authentication files
-- Database models and migrations
 
 ## Data Flow
 Map how data moves through the application:

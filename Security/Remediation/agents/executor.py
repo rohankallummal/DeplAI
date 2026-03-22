@@ -15,14 +15,12 @@ async def run(
     workspace_path: str,
     cycle_num: int = 1,
     cycle_history: str = "",
-    use_web_tools: bool = False,
 ) -> bool:
     tools = [
         "Read", "Write", "Edit", "MultiEdit",
         "Bash", "Glob", "Grep", "Agent",
+        "WebSearch", "WebFetch",
     ]
-    if use_web_tools:
-        tools.extend(["WebSearch", "WebFetch"])
 
     system_prompt = SYSTEM_PROMPT
     if cycle_num > 1 and cycle_history:

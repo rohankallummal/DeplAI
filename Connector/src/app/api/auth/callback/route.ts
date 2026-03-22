@@ -96,7 +96,7 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard`);
+    return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/webpages`);
   } catch (error) {
     console.error('Auth callback error:', error);
     return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/?error=auth_failed`);

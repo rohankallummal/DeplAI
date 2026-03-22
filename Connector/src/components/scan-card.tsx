@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import LoadingSpinner from '@/components/loading-spinner';
-import { usePopup } from '@/components/popup';
+import { usePopup } from '@/components/toast-notification';
 import { FiShield } from 'react-icons/fi';
 
 interface ScanModalProps {
@@ -81,9 +81,7 @@ export default function ScanModal({ isOpen, onClose, project, onScanComplete }: 
 
         <div className="p-8 pt-6">
           <div className="flex flex-col items-center">
-            <div className="w-20 h-20 bg-green-100 dark:bg-green-900/30 rounded-full flex items-center justify-center mb-6">
-              <FiShield className="w-10 h-10 text-green-600 dark:text-green-500" />
-            </div>
+            <FiShield className="w-20 h-20 text-green-600 dark:text-green-500 mb-6" />
 
             <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-3 text-center">
               Confirmation

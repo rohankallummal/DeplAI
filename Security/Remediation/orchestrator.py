@@ -73,7 +73,6 @@ class Orchestrator:
             WORKSPACE_PATH,
             cycle_num=cycle,
             cycle_history=history_str,
-            use_web_tools=(cycle > 1),
         ):
             await self.on_message("error", f"Cycle {cycle}: Executor failed")
             return {"success": False, "message": f"Executor failed on cycle {cycle}", "cycles_run": cycle}
@@ -138,6 +137,7 @@ class Orchestrator:
     def _prepare_workspace(self):
         os.makedirs(WORKSPACE_PATH, exist_ok=True)
         os.makedirs(os.path.join(WORKSPACE_PATH, "security"), exist_ok=True)
+        os.makedirs(os.path.join(WORKSPACE_PATH, "Artifact", "Knowledge-Store"), exist_ok=True)
 
     def _load_initial_scan_data(self) -> dict | None:
         bearer_files = glob.glob(
