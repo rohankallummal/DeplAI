@@ -24,6 +24,7 @@ interface SecurityPopupProps {
   onPublishComplete?: (url: string) => void;
   remediationResult?: RemediationResult | null;
   publishedUrl?: string | null;
+  createdFromLocal?: boolean;
 }
 
 function CloseButton({ onClick }: { onClick: () => void }) {
@@ -225,7 +226,7 @@ function RemediatedContent({ project, onPublishComplete, isGitHub }: { project: 
   return <PublishStep config={config} onComplete={onPublishComplete} />;
 }
 
-function PublishedContent({ publishedUrl, onClose, isGitHub }: { publishedUrl: string; onClose: () => void; isGitHub: boolean }) {
+function PublishedContent({ publishedUrl, onClose, isGitHub, createdFromLocal }: { publishedUrl: string; onClose: () => void; isGitHub: boolean; createdFromLocal?: boolean }) {
   return (
     <div className="flex flex-col items-center text-center pt-6">
       <div className="w-32 h-32 mb-6 scale-200">
@@ -235,7 +236,7 @@ function PublishedContent({ publishedUrl, onClose, isGitHub }: { publishedUrl: s
         Remediation Complete
       </h2>
       <p className="text-muted text-base mb-6">
-        {isGitHub
+        {isGitHub && !createdFromLocal
           ? 'A pull request has been created with the fixes.'
           : 'A GitHub repository has been created with the updated code.'}
       </p>
@@ -279,7 +280,7 @@ function FailedContent({ onClose, remediationResult }: { onClose: () => void; re
   );
 }
 
-export default function SecurityPopup({ scenario, projectName, project, onClose, onPublishComplete, remediationResult, publishedUrl }: SecurityPopupProps) {
+export default function SecurityPopup({ scenario, projectName, project, onClose, onPublishComplete, remediationResult, publishedUrl, createdFromLocal }: SecurityPopupProps) {
   return (
     <div className="relative w-full max-w-[680px] mx-4 rounded-2xl shadow-2xl overflow-hidden bg-surface border border-border">
       <div className="px-10 py-12">
@@ -300,6 +301,7 @@ export default function SecurityPopup({ scenario, projectName, project, onClose,
             publishedUrl={publishedUrl}
             onClose={onClose}
             isGitHub={project?.type !== 'local'}
+            createdFromLocal={createdFromLocal}
           />
         )}
         {scenario === 'failed' && (

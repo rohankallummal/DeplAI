@@ -31,9 +31,9 @@ export default function LoadingSpinner({ size = 'lg', text, className = '', inve
   );
 }
 
-export function LoadingScreen({ text, invert = false }: { text?: string; invert?: boolean }) {
+export function LoadingScreen({ text, invert = false, className }: { text?: string; invert?: boolean; className?: string }) {
   return (
-    <div className="min-h-screen bg-header flex items-center justify-center">
+    <div className={`min-h-screen flex items-center justify-center ${className ?? 'bg-header'}`}>
       <LoadingSpinner size="lg" text={text} invert={invert} />
     </div>
   );

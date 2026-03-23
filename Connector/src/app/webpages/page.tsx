@@ -54,11 +54,17 @@ function DashboardContent() {
       }
 
       setUser(session.user);
+
+      // Wait for initial data before showing the dashboard
+      // This prevents the installation panel from flashing before data arrives
+      await Promise.all([
+        fetchInstallations().catch(() => {}),
+        fetchProjects().catch(() => {}),
+      ]);
+
       setAuthLoading(false);
 
-      fetchInstallations();
-      fetchProjects();
-
+      // Sync in background and refresh data silently
       fetch('/api/sync', { method: 'POST' })
         .then(() => {
           fetchInstallations();
@@ -169,6 +175,10 @@ function DashboardContent() {
   async function handleLogout() {
     resetAll();
     localStorage.removeItem('theme');
+    localStorage.removeItem('deplai_created_repos');
+    Object.keys(localStorage)
+      .filter(k => k.startsWith('deplai_published_') || k.startsWith('deplai_remediated_'))
+      .forEach(k => localStorage.removeItem(k));
     await fetch('/api/auth/logout', { method: 'POST' });
     router.push('/');
   }

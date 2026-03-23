@@ -13,6 +13,7 @@ import { SiGithub, SiNextdotjs, SiDocker, SiLangchain, SiPrisma, SiTailwindcss, 
 export default function Home() {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
+  const [navigating, setNavigating] = useState(false);
   const [authKey, setAuthKey] = useState(0);
 
   const checkAuth = useCallback(async () => {
@@ -22,6 +23,9 @@ export default function Home() {
       const session = await res.json();
 
       if (session.isLoggedIn) {
+        setNavigating(true);
+        // Wait two animation frames so the overlay is painted before navigating
+        await new Promise<void>(r => requestAnimationFrame(() => requestAnimationFrame(() => r())));
         router.replace('/webpages');
         return;
       }
@@ -51,11 +55,18 @@ export default function Home() {
   }, [checkAuth]);
 
   if (loading) {
-    return <LoadingScreen invert />;
+    return (
+      <>
+        {navigating && <div className="fixed inset-0 z-[9999] bg-header" />}
+        <LoadingScreen invert className="bg-black" />
+      </>
+    );
   }
 
   return (
-    <div className="min-h-screen bg-black relative">
+    <>
+      {navigating && <div className="fixed inset-0 z-[9999] bg-header" />}
+      <div className="min-h-screen bg-black relative">
       <div className="absolute inset-0 z-0">
         <Threads
           color={[1, 1, 1]}
@@ -148,6 +159,7 @@ export default function Home() {
           </div>
         </div>
       </motion.footer>
-    </div>
+      </div>
+    </>
   );
 }

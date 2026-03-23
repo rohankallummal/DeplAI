@@ -1,6 +1,7 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useEffect, useMemo } from 'react';
+import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import LoadingSpinner from '@/components/loading-spinner';
 import ProjectIcon from '@/components/project-icons';
@@ -49,6 +50,7 @@ export default function Projects({
   activeScanIds,
   activeRemediationIds,
 }: ProjectsProps) {
+  const router = useRouter();
   const { showPopup } = usePopup();
   const [searchQuery, setSearchQuery] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
@@ -60,6 +62,33 @@ export default function Projects({
   const [deployMode, setDeployMode] = useState(false);
   const [deploySelectedId, setDeploySelectedId] = useState<string | null>(null);
   const [deployConfirmOpen, setDeployConfirmOpen] = useState(false);
+
+  const [remediatedIds, setRemediatedIds] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    const ids = new Set<string>();
+    let createdRepos: { fullName: string }[] = [];
+
+    try {
+      createdRepos = JSON.parse(localStorage.getItem('deplai_created_repos') || '[]');
+    } catch {}
+
+    for (const p of projects) {
+      if (localStorage.getItem(`deplai_remediated_${p.id}`) ||
+          localStorage.getItem(`deplai_published_${p.id}`)) {
+        ids.add(p.id);
+      }
+
+      if (p.type === 'github') {
+        const fullName = `${p.owner}/${p.repo}`;
+        if (createdRepos.some((r: any) => r.fullName === fullName)) {
+          ids.add(p.id);
+        }
+      }
+    }
+
+    setRemediatedIds(ids);
+  }, [projects]);
 
   const handleScanClick = (project: any) => {
     setSelectedProject(project);
@@ -93,6 +122,9 @@ export default function Projects({
   };
 
   const handleDeployConfirmYes = () => {
+    if (deploySelectedProject) {
+      router.push(`/webpages/deploy?project_id=${deploySelectedProject.id}`);
+    }
     setDeployConfirmOpen(false);
   };
 
@@ -434,7 +466,7 @@ export default function Projects({
                               >
                                 Scanning
                               </GradientText>
-                            ) : (
+                            ) : remediatedIds.has(project.id) ? null : (
                               <button
                                 disabled={anyOperationActive}
                                 className={`text-sm font-medium px-3 py-1 rounded-lg transition ${

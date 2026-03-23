@@ -28,6 +28,7 @@ export default function SecurityAnalysisPage() {
   const [activePopup, setActivePopup] = useState<'clean' | 'remediated' | 'failed' | 'published' | null>(null);
   const [findingsReady, setFindingsReady] = useState(false);
   const [publishedUrl, setPublishedUrl] = useState<string | null>(null);
+  const [createdFromLocal, setCreatedFromLocal] = useState(false);
 
   const remediating = remediationState === 'running';
   const remediationDone = remediationState === 'completed';
@@ -54,11 +55,30 @@ export default function SecurityAnalysisPage() {
 
   useEffect(() => {
     if (remediationDone && remediationResult) {
+      if (remediationResult.success) {
+        localStorage.setItem(`deplai_remediated_${projectId}`, 'true');
+      }
       setActivePopup(prev =>
         prev === 'published' ? prev : remediationResult.success ? 'remediated' : 'failed'
       );
     }
-  }, [remediationDone, remediationResult]);
+  }, [remediationDone, remediationResult, projectId]);
+
+  useEffect(() => {
+    if (!project || project.type === 'local') return;
+    if (activePopup === 'published' && publishedUrl) return;
+
+    const fullName = `${project.owner}/${project.repo}`;
+    try {
+      const created = JSON.parse(localStorage.getItem('deplai_created_repos') || '[]');
+      const match = created.find((r: any) => r.fullName === fullName);
+      if (match) {
+        setPublishedUrl(match.url);
+        setCreatedFromLocal(true);
+        setActivePopup('published');
+      }
+    } catch {}
+  }, [project]);
 
   async function fetchProjectInfo() {
     try {
@@ -77,6 +97,10 @@ export default function SecurityAnalysisPage() {
   async function handleLogout() {
     resetAll();
     localStorage.removeItem('theme');
+    localStorage.removeItem('deplai_created_repos');
+    Object.keys(localStorage)
+      .filter(k => k.startsWith('deplai_published_') || k.startsWith('deplai_remediated_'))
+      .forEach(k => localStorage.removeItem(k));
     await fetch('/api/auth/logout', { method: 'POST' });
     router.push('/');
   }
@@ -93,11 +117,24 @@ export default function SecurityAnalysisPage() {
     await startRemediation(projectId);
   }
 
-  function handlePublishComplete(url: string) {
+  async function handlePublishComplete(url: string) {
     localStorage.setItem(
       `deplai_published_${projectId}`,
       JSON.stringify({ url }),
     );
+
+    if (project?.type === 'local') {
+      try {
+        const repoFullName = new URL(url).pathname.slice(1).replace(/\/$/, '');
+        const existing = JSON.parse(localStorage.getItem('deplai_created_repos') || '[]');
+        existing.push({ fullName: repoFullName, url });
+        localStorage.setItem('deplai_created_repos', JSON.stringify(existing));
+      } catch {}
+
+      try {
+        await fetch(`/api/projects/${projectId}`, { method: 'DELETE' });
+      } catch {}
+    }
 
     const name = project?.name || project?.repo || scanProjectName || 'Unknown';
     const isGitHub = project?.type !== 'local';
@@ -202,6 +239,7 @@ export default function SecurityAnalysisPage() {
               onPublishComplete={handlePublishComplete}
               remediationResult={remediationResult}
               publishedUrl={publishedUrl}
+              createdFromLocal={createdFromLocal}
             />
           </div>
         )}

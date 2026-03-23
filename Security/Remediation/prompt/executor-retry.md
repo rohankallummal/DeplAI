@@ -12,7 +12,7 @@ Review what was tried, why it failed, and choose an alternative.
 ## Knowledge Store Retrieval
 
 Before performing any new web searches, check the knowledge store at
-`/workspace/Artifact/Knowledge-Store/index.json` for information already
+`/workspace/Knowledge-Store/index.json` for information already
 fetched in previous cycles.
 
 1. Read `index.json` and scan for entries matching the vulnerability you are

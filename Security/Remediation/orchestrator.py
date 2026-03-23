@@ -137,7 +137,7 @@ class Orchestrator:
     def _prepare_workspace(self):
         os.makedirs(WORKSPACE_PATH, exist_ok=True)
         os.makedirs(os.path.join(WORKSPACE_PATH, "security"), exist_ok=True)
-        os.makedirs(os.path.join(WORKSPACE_PATH, "Artifact", "Knowledge-Store"), exist_ok=True)
+        os.makedirs(os.path.join(WORKSPACE_PATH, "Knowledge-Store"), exist_ok=True)
 
     def _load_initial_scan_data(self) -> dict | None:
         bearer_files = glob.glob(

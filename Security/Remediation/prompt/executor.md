@@ -43,21 +43,21 @@ Before applying a fix, search for guidance:
 - Check security databases (NVD, OWASP, vendor advisories) for remediation steps
 - Find the correct fixed version for vulnerable dependencies
 
-**Do not hallucinate fixes.** If you are unsure how to remediate a vulnerability,
+**Important:** If you are unsure how to remediate a vulnerability,
 search for it first. A fix backed by real documentation is always preferred over
 a best-guess attempt.
 
 ## Knowledge Store
 
 All web research must be cached in the knowledge store at:
-`/workspace/Artifact/Knowledge-Store/`
+`/workspace/Knowledge-Store/`
 
 This store persists across remediation cycles so that previously fetched
 information is never re-fetched.
 
 ### Index
 
-Maintain an index file at `/workspace/Artifact/Knowledge-Store/index.json`.
+Maintain an index file at `/workspace/Knowledge-Store/index.json`.
 
 Before your first write, check if the file exists. If not, initialize it:
 ```json
@@ -81,7 +81,7 @@ Each entry in the index has this structure:
 
 **Every time** you need web information:
 
-1. Read `/workspace/Artifact/Knowledge-Store/index.json`.
+1. Read `/workspace/Knowledge-Store/index.json`.
 2. Scan entries by `id`, `tags`, and `summary` for a match.
 3. If a relevant entry exists → read the stored file directly. **Do NOT re-fetch.**
 4. If no relevant entry exists → perform the web search/fetch.
