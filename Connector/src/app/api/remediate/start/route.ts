@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireAuth } from '@/lib/auth';
+import { requireAuth, verifyProjectOwnership } from '@/lib/auth';
 import { SECURITY_URL, securityHeaders } from '@/lib/security';
 
 export async function POST(request: NextRequest) {
   try {
-    const { error } = await requireAuth();
+    const { user, error } = await requireAuth();
     if (error) return error;
 
     const { project_id } = await request.json();
@@ -12,6 +12,9 @@ export async function POST(request: NextRequest) {
     if (!project_id) {
       return NextResponse.json({ error: 'project_id is required' }, { status: 400 });
     }
+
+    const ownership = await verifyProjectOwnership(user.id, project_id);
+    if (ownership.error) return ownership.error;
 
     const response = await fetch(`${SECURITY_URL}/api/remediate/validate`, {
       method: 'POST',
