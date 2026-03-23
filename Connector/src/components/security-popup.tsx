@@ -226,7 +226,7 @@ function RemediatedContent({ project, onPublishComplete, isGitHub }: { project: 
   return <PublishStep config={config} onComplete={onPublishComplete} />;
 }
 
-function PublishedContent({ publishedUrl, onClose, isGitHub, createdFromLocal }: { publishedUrl: string; onClose: () => void; isGitHub: boolean; createdFromLocal?: boolean }) {
+function PublishedContent({ publishedUrl, isGitHub, createdFromLocal }: { publishedUrl: string; isGitHub: boolean; createdFromLocal?: boolean }) {
   return (
     <div className="flex flex-col items-center text-center pt-6">
       <div className="w-32 h-32 mb-6 scale-200">
@@ -299,7 +299,6 @@ export default function SecurityPopup({ scenario, projectName, project, onClose,
         {scenario === 'published' && publishedUrl != null && (
           <PublishedContent
             publishedUrl={publishedUrl}
-            onClose={onClose}
             isGitHub={project?.type !== 'local'}
             createdFromLocal={createdFromLocal}
           />

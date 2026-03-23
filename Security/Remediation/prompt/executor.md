@@ -82,7 +82,7 @@ Each entry in the index has this structure:
 **Every time** you need web information:
 
 1. Read `/workspace/Knowledge-Store/index.json`.
-2. Scan entries by `id`, `tags`, and `summary` for a match.
+2. Scan entries for a match.
 3. If a relevant entry exists → read the stored file directly. **Do NOT re-fetch.**
 4. If no relevant entry exists → perform the web search/fetch.
 5. Store the result as a structured summary in a new file.

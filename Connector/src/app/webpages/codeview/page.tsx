@@ -49,7 +49,8 @@ function RepositoryBrowserContent() {
   const owner = searchParams.get('owner') || '';
   const repo = searchParams.get('repo') || '';
   const projectId = searchParams.get('project_id') || '';
-  
+  const branchParam = searchParams.get('branch') || '';
+
   const currentPath = searchParams.get('path') || '';
 
   const { showPopup } = usePopup();
@@ -64,22 +65,33 @@ function RepositoryBrowserContent() {
   const [isSuspended, setIsSuspended] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
   const [username, setUsername] = useState('');
+  const [branches, setBranches] = useState<string[]>([]);
+  const [currentBranch, setCurrentBranch] = useState<string>(branchParam);
+  const [defaultBranch, setDefaultBranch] = useState<string>('');
+  const [branchDropdownOpen, setBranchDropdownOpen] = useState(false);
+  const [branchSearch, setBranchSearch] = useState('');
 
   useEffect(() => {
     checkAuth();
   }, []);
 
   useEffect(() => {
+    if (!authLoading && !isLocal && owner && repo) {
+      fetchBranches();
+    }
+  }, [owner, repo, authLoading, isLocal]);
+
+  useEffect(() => {
     if (!authLoading) {
       if (isLocal && projectId) {
         fetchProjectDetails();
         fetchContents();
-      } else if (!isLocal && owner && repo) {
+      } else if (!isLocal && owner && repo && currentBranch) {
         setProjectName(repo);
         fetchContents();
       }
     }
-  }, [owner, repo, projectId, currentPath, authLoading, isLocal]);
+  }, [owner, repo, projectId, currentPath, authLoading, isLocal, currentBranch]);
 
   async function checkAuth() {
     try {
@@ -117,11 +129,36 @@ function RepositoryBrowserContent() {
     }
   }
 
+  async function fetchBranches() {
+    try {
+      const res = await fetch(`/api/repositories/branches?owner=${owner}&repo=${repo}`);
+      if (res.ok) {
+        const data = await res.json();
+        setBranches(data.branches || []);
+        setDefaultBranch(data.defaultBranch || 'main');
+        setCurrentBranch(prev => prev || data.defaultBranch || 'main');
+      } else {
+        setCurrentBranch(prev => prev || 'main');
+      }
+    } catch (err) {
+      console.error('Failed to fetch branches:', err);
+      setCurrentBranch(prev => prev || 'main');
+    }
+  }
+
+  function handleBranchChange(branch: string) {
+    setCurrentBranch(branch);
+    setBranchDropdownOpen(false);
+    setBranchSearch('');
+    router.replace(buildNavigationUrl('', branch));
+  }
+
   function apiUrl(endpoint: 'contents' | 'file', filePath: string) {
     if (isLocal) {
       return `/api/projects/local/${endpoint}?project_id=${projectId}&path=${filePath}`;
     }
-    return `/api/repositories/${endpoint}?owner=${owner}&repo=${repo}&path=${filePath}`;
+    const branchQuery = currentBranch ? `&branch=${encodeURIComponent(currentBranch)}` : '';
+    return `/api/repositories/${endpoint}?owner=${owner}&repo=${repo}&path=${filePath}${branchQuery}`;
   }
 
   async function fetchContents() {
@@ -186,7 +223,7 @@ function RepositoryBrowserContent() {
       const res = await fetch('/api/repositories/refresh', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ owner, repo }),
+        body: JSON.stringify({ owner, repo, branch: currentBranch }),
       });
 
       if (!res.ok) {
@@ -210,12 +247,12 @@ function RepositoryBrowserContent() {
     }
   }
 
-  function buildNavigationUrl(path: string) {
+  function buildNavigationUrl(navPath: string, branch?: string) {
     if (isLocal) {
-      return `/webpages/codeview?project_id=${projectId}&type=local${path ? `&path=${path}` : ''}`;
-    } else {
-      return `/webpages/codeview?owner=${owner}&repo=${repo}&type=github${path ? `&path=${path}` : ''}`;
+      return `/webpages/codeview?project_id=${projectId}&type=local${navPath ? `&path=${navPath}` : ''}`;
     }
+    const b = branch || currentBranch;
+    return `/webpages/codeview?owner=${owner}&repo=${repo}&type=github${b ? `&branch=${encodeURIComponent(b)}` : ''}${navPath ? `&path=${navPath}` : ''}`;
   }
 
   function handleDirectoryClick(itemPath: string) {
@@ -301,22 +338,81 @@ function RepositoryBrowserContent() {
           </div>
 
           {!chatOpen && (
-            <div className="flex items-center space-x-2 mt-3 text-sm">
-              {breadcrumbs.map((crumb, index) => (
-                <div key={index} className="flex items-center space-x-2">
-                  {index > 0 && <span className="text-gray-400">/</span>}
-                  {index === breadcrumbs.length - 1 ? (
-                    <span className="text-foreground font-medium">{crumb.name}</span>
-                  ) : (
-                    <button
-                      onClick={() => router.replace(buildNavigationUrl(crumb.path))}
-                      className="text-blue-600 dark:text-blue-400 hover:underline"
-                    >
-                      {crumb.name}
-                    </button>
+            <div className="flex items-center justify-between mt-3">
+              <div className="flex items-center space-x-2 text-sm">
+                {breadcrumbs.map((crumb, index) => (
+                  <div key={index} className="flex items-center space-x-2">
+                    {index > 0 && <span className="text-gray-400">/</span>}
+                    {index === breadcrumbs.length - 1 ? (
+                      <span className="text-foreground font-medium">{crumb.name}</span>
+                    ) : (
+                      <button
+                        onClick={() => router.replace(buildNavigationUrl(crumb.path))}
+                        className="text-blue-600 dark:text-blue-400 hover:underline"
+                      >
+                        {crumb.name}
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              {!isLocal && branches.length > 1 && (
+                <div className="relative">
+                  <button
+                    onClick={() => setBranchDropdownOpen(prev => !prev)}
+                    className="flex items-center gap-2 px-3 py-1.5 text-sm rounded-lg border border-border bg-surface text-foreground hover:bg-surface-hover transition max-w-[240px]"
+                  >
+                    <span className="truncate">{currentBranch}</span>
+                    <svg className="w-3 h-3 text-muted shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                    </svg>
+                  </button>
+                  {branchDropdownOpen && (
+                    <div className="absolute right-0 mt-2 w-56 bg-surface border border-border rounded-lg shadow-lg z-20">
+                      <div className="p-2 border-b border-border">
+                        <div className="relative">
+                          <svg className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted pointer-events-none" viewBox="0 0 24 25" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M15.277 13.2502C15.277 13.6645 14.9412 14.0002 14.527 14.0002L7.96792 14.0002C7.5537 14.0002 7.21792 13.6645 7.21792 13.2502C7.21792 12.836 7.5537 12.5002 7.96792 12.5002L14.527 12.5002C14.9412 12.5002 15.277 12.836 15.277 13.2502Z" fill="currentColor"/>
+                            <path d="M12.8468 9.75025C12.8468 10.1645 12.511 10.5002 12.0968 10.5002H7.96719C7.55297 10.5002 7.21719 10.1645 7.21719 9.75025C7.21719 9.33603 7.55297 9.00025 7.96719 9.00025L12.0968 9.00025C12.511 9.00025 12.8468 9.33603 12.8468 9.75025Z" fill="currentColor"/>
+                            <path fillRule="evenodd" clipRule="evenodd" d="M2 11.4989C2 6.39126 6.14154 2.25098 11.25 2.25098C16.3585 2.25098 20.5 6.39126 20.5 11.4989C20.5 13.7836 19.6714 15.8747 18.2983 17.4883L21.7791 20.9695C22.072 21.2624 22.072 21.7372 21.7791 22.0301C21.4862 22.323 21.0113 22.323 20.7184 22.0301L17.2372 18.5486C15.6237 19.9197 13.5334 20.7469 11.25 20.7469C6.14154 20.7469 2 16.6066 2 11.4989ZM11.25 3.75098C6.96962 3.75098 3.5 7.22003 3.5 11.4989C3.5 15.7779 6.96962 19.2469 11.25 19.2469C15.5304 19.2469 19 15.7779 19 11.4989C19 7.22003 15.5304 3.75098 11.25 3.75098Z" fill="currentColor"/>
+                          </svg>
+                          <input
+                            type="text"
+                            value={branchSearch}
+                            onChange={(e) => setBranchSearch(e.target.value)}
+                            className="w-full pl-8 pr-3 py-1.5 text-sm rounded-md border border-border bg-surface text-foreground focus:outline-none focus:ring-1 focus:ring-blue-500"
+                            autoFocus
+                          />
+                        </div>
+                      </div>
+                      <div className="max-h-52 overflow-y-auto">
+                        {branches
+                          .filter(b => b.toLowerCase().includes(branchSearch.toLowerCase()))
+                          .map(b => (
+                            <button
+                              key={b}
+                              onClick={() => handleBranchChange(b)}
+                              className={`w-full px-4 py-2 text-left text-sm hover:bg-surface-hover transition ${
+                                b === currentBranch
+                                  ? 'text-blue-600 dark:text-blue-400 font-medium'
+                                  : 'text-foreground'
+                              }`}
+                            >
+                              {b}
+                              {b === defaultBranch && (
+                                <span className="ml-2 text-xs text-muted">(default)</span>
+                              )}
+                            </button>
+                          ))}
+                        {branches.filter(b => b.toLowerCase().includes(branchSearch.toLowerCase())).length === 0 && (
+                          <p className="px-4 py-2 text-sm text-muted">No branches found</p>
+                        )}
+                      </div>
+                    </div>
                   )}
                 </div>
-              ))}
+              )}
             </div>
           )}
         </div>

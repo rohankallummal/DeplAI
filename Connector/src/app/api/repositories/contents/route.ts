@@ -11,6 +11,7 @@ export async function GET(request: NextRequest) {
     const owner = searchParams.get('owner');
     const repo = searchParams.get('repo');
     const path = searchParams.get('path') || '';
+    const branch = searchParams.get('branch') || undefined;
 
     if (!owner || !repo) {
       return NextResponse.json(
@@ -39,7 +40,8 @@ export async function GET(request: NextRequest) {
       ownership.installationId,
       owner,
       repo,
-      path
+      path,
+      branch
     );
 
     return NextResponse.json({ contents });

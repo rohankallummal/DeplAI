@@ -29,23 +29,13 @@ export async function verifyLocalProjectAccess(
   userId: string,
   projectId: string
 ): Promise<{ project: any; error?: never } | { project?: never; error: NextResponse }> {
-  const [project] = await query<any[]>(
-    `SELECT id, name, project_type, user_id
-     FROM projects
-     WHERE id = ?`,
-    [projectId]
-  );
+  const result = await verifyProjectOwnership(userId, projectId);
+  if (result.error) return result;
 
-  if (!project) {
-    return { error: NextResponse.json({ error: 'Project not found' }, { status: 404 }) };
-  }
-  if (project.user_id !== userId) {
-    return { error: NextResponse.json({ error: 'Forbidden: You do not own this project' }, { status: 403 }) };
-  }
-  if (project.project_type !== 'local') {
+  if (result.project.project_type !== 'local') {
     return { error: NextResponse.json({ error: 'This endpoint is for local projects only' }, { status: 400 }) };
   }
-  return { project };
+  return result;
 }
 
 export async function verifyInstallationOwnership(

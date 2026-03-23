@@ -7,7 +7,7 @@ export async function POST(request: NextRequest) {
     const { user, error } = await requireAuth();
     if (error) return error;
 
-    const { owner, repo } = await request.json();
+    const { owner, repo, branch } = await request.json();
 
     if (!owner || !repo) {
       return NextResponse.json(
@@ -34,7 +34,8 @@ export async function POST(request: NextRequest) {
     await githubService.forceRefresh(
       repoAccess.installationId,
       owner,
-      repo
+      repo,
+      branch
     );
 
     return NextResponse.json({ 

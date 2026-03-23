@@ -122,113 +122,127 @@ export class GitHubService {
     return data.id;
   }
 
-  private repoPath(owner: string, repo: string): string {
+  private repoBasePath(owner: string, repo: string): string {
     return path.join(process.cwd(), 'tmp', 'repos', owner, repo);
   }
 
-  private async withBranchFallback<T>(
-    owner: string,
-    repo: string,
-    branch: string,
-    operation: (branch: string) => Promise<T>
-  ): Promise<T> {
-    try {
-      return await operation(branch);
-    } catch (error: any) {
-      const fallback = branch === 'main' ? 'master' : 'main';
-      if (!error.message.includes('Remote branch') && !error.message.includes('couldn\'t find remote ref')) {
-        throw error;
-      }
-
-      console.log(`Branch '${branch}' failed for ${owner}/${repo}, trying '${fallback}'...`);
-      const result = await operation(fallback);
-
-      await query(
-        `UPDATE github_repositories SET default_branch = ? WHERE full_name = ?`,
-        [fallback, `${owner}/${repo}`]
-      );
-
-      return result;
-    }
+  private branchPath(owner: string, repo: string, branch: string): string {
+    return path.join(this.repoBasePath(owner, repo), branch);
   }
 
-  private async updateRepoState(owner: string, repo: string, repoPath: string): Promise<void> {
-    const git = simpleGit(repoPath);
-    const commitSha = await git.revparse(['HEAD']);
+  private authUrl(token: string, owner: string, repo: string): string {
+    return `https://x-access-token:${token}@github.com/${owner}/${repo}.git`;
+  }
+
+  private parseDefaultBranch(symrefOutput: string): string {
+    const match = symrefOutput.match(/ref:\s+refs\/heads\/(\S+)\s+HEAD/);
+    return match ? match[1] : 'main';
+  }
+
+  private async updateDefaultBranch(owner: string, repo: string, branch: string): Promise<void> {
     await query(
-      `UPDATE github_repositories
-       SET needs_refresh = false, last_cloned_at = NOW(), last_commit_sha = ?
-       WHERE full_name = ?`,
-      [commitSha, `${owner}/${repo}`]
+      `UPDATE github_repositories SET default_branch = ? WHERE full_name = ?`,
+      [branch, `${owner}/${repo}`]
     );
   }
 
-  async cloneRepository(
-    installationId: string,
-    owner: string,
-    repo: string,
-    branch?: string
-  ): Promise<string> {
+  async getRemoteDefaultBranch(installationId: string, owner: string, repo: string): Promise<string> {
     const token = await this.getInstallationToken(installationId);
-    const repoDir = this.repoPath(owner, repo);
-
-    fs.mkdirSync(path.dirname(repoDir), { recursive: true });
-    if (fs.existsSync(repoDir)) {
-      fs.rmSync(repoDir, { recursive: true, force: true });
-    }
-
-    const cloneUrl = `https://x-access-token:${token}@github.com/${owner}/${repo}.git`;
-    const git = simpleGit();
-
-    console.log(`Cloning ${owner}/${repo}...`);
-
-    await this.withBranchFallback(owner, repo, branch || 'main', async (b) => {
-      await git.clone(cloneUrl, repoDir, ['--depth', '1', '--single-branch', '--branch', b]);
-      console.log(`Cloned ${owner}/${repo} (branch: ${b}) successfully`);
-    });
-
-    await this.updateRepoState(owner, repo, repoDir);
-    return repoDir;
+    const output = await simpleGit().listRemote(['--symref', this.authUrl(token, owner, repo), 'HEAD']);
+    const defaultBranch = this.parseDefaultBranch(output);
+    await this.updateDefaultBranch(owner, repo, defaultBranch);
+    return defaultBranch;
   }
 
-  async pullRepository(installationId: string, owner: string, repo: string): Promise<string> {
-    const repoDir = this.repoPath(owner, repo);
-
-    if (!fs.existsSync(repoDir)) {
-      throw new Error('Repository not cloned yet');
-    }
-
+  async getBranchInfo(installationId: string, owner: string, repo: string): Promise<{ defaultBranch: string; branches: string[] }> {
     const token = await this.getInstallationToken(installationId);
-    const git = simpleGit(repoDir);
-    await git.remote(['set-url', 'origin', `https://x-access-token:${token}@github.com/${owner}/${repo}.git`]);
+    const url = this.authUrl(token, owner, repo);
 
+    const [symrefOutput, headsOutput] = await Promise.all([
+      simpleGit().listRemote(['--symref', url, 'HEAD']),
+      simpleGit().listRemote(['--heads', url]),
+    ]);
+
+    const defaultBranch = this.parseDefaultBranch(symrefOutput);
+
+    const branches = headsOutput
+      .split('\n')
+      .filter(line => line.trim())
+      .map(line => line.split('\t')[1]?.replace('refs/heads/', '') || '')
+      .filter(Boolean);
+
+    await this.updateDefaultBranch(owner, repo, defaultBranch);
+    return { defaultBranch, branches };
+  }
+
+  private async getEffectiveBranch(installationId: string, owner: string, repo: string): Promise<string> {
     const [repoData] = await query<any[]>(
       `SELECT default_branch FROM github_repositories WHERE full_name = ?`,
       [`${owner}/${repo}`]
     );
-    const branch = repoData?.default_branch || 'main';
 
-    console.log(`Pulling latest changes for ${owner}/${repo} (branch: ${branch})...`);
+    if (repoData?.default_branch) return repoData.default_branch;
 
-    await this.withBranchFallback(owner, repo, branch, async (b) => {
-      await git.pull('origin', b);
-      console.log(`Updated ${owner}/${repo} (branch: ${b}) successfully`);
-    });
-
-    await this.updateRepoState(owner, repo, repoDir);
-    return repoDir;
+    return await this.getRemoteDefaultBranch(installationId, owner, repo);
   }
 
-  async ensureRepoFresh(
+  async cloneBranch(
     installationId: string,
     owner: string,
-    repo: string
+    repo: string,
+    branch: string
   ): Promise<string> {
-    const repoPath = this.repoPath(owner, repo);
+    const token = await this.getInstallationToken(installationId);
+    const branchDir = this.branchPath(owner, repo, branch);
+
+    if (fs.existsSync(branchDir)) {
+      fs.rmSync(branchDir, { recursive: true, force: true });
+    }
+    fs.mkdirSync(path.dirname(branchDir), { recursive: true });
+
+    const cloneUrl = this.authUrl(token, owner, repo);
+    const git = simpleGit();
+
+    console.log(`Cloning ${owner}/${repo} (branch: ${branch})...`);
+    await git.clone(cloneUrl, branchDir, ['--depth', '1', '--single-branch', '--branch', branch]);
+    console.log(`Cloned ${owner}/${repo} (branch: ${branch}) successfully`);
+
+    return branchDir;
+  }
+
+  async pullBranch(
+    installationId: string,
+    owner: string,
+    repo: string,
+    branch: string
+  ): Promise<string> {
+    const branchDir = this.branchPath(owner, repo, branch);
+
+    if (!fs.existsSync(branchDir)) {
+      throw new Error('Branch not cloned yet');
+    }
+
+    const token = await this.getInstallationToken(installationId);
+    const git = simpleGit(branchDir);
+    await git.remote(['set-url', 'origin', this.authUrl(token, owner, repo)]);
+
+    console.log(`Pulling latest for ${owner}/${repo} (branch: ${branch})...`);
+    await git.pull('origin', branch);
+    console.log(`Updated ${owner}/${repo} (branch: ${branch}) successfully`);
+
+    return branchDir;
+  }
+
+  async ensureBranchFresh(
+    installationId: string,
+    owner: string,
+    repo: string,
+    branch: string
+  ): Promise<string> {
+    const branchDir = this.branchPath(owner, repo, branch);
 
     const [repoData] = await query<any[]>(
-      `SELECT needs_refresh, default_branch FROM github_repositories 
-       WHERE full_name = ?`,
+      `SELECT needs_refresh FROM github_repositories WHERE full_name = ?`,
       [`${owner}/${repo}`]
     );
 
@@ -236,23 +250,35 @@ export class GitHubService {
       throw new Error('Repository not found in database');
     }
 
-    const needsRefresh = repoData.needs_refresh || !fs.existsSync(repoPath);
+    const needsClone = !fs.existsSync(branchDir);
 
-    if (!needsRefresh) return repoPath;
-
-    if (!fs.existsSync(repoPath)) {
-      return await this.cloneRepository(installationId, owner, repo, repoData.default_branch);
+    if (!needsClone && !repoData.needs_refresh) {
+      return branchDir;
     }
-    return await this.pullRepository(installationId, owner, repo);
+
+    const result = needsClone
+      ? await this.cloneBranch(installationId, owner, repo, branch)
+      : await this.pullBranch(installationId, owner, repo, branch);
+
+    if (repoData.needs_refresh) {
+      await query(
+        `UPDATE github_repositories SET needs_refresh = false WHERE full_name = ?`,
+        [`${owner}/${repo}`]
+      );
+    }
+
+    return result;
   }
 
   async getDirectoryContents(
     installationId: string,
     owner: string,
     repo: string,
-    dirPath: string = ''
+    dirPath: string = '',
+    branch?: string
   ): Promise<any[]> {
-    const repoPath = await this.ensureRepoFresh(installationId, owner, repo);
+    const effectiveBranch = branch || await this.getEffectiveBranch(installationId, owner, repo);
+    const repoPath = await this.ensureBranchFresh(installationId, owner, repo, effectiveBranch);
     const fullPath = path.join(repoPath, dirPath);
 
     if (!fs.existsSync(fullPath)) {
@@ -281,9 +307,11 @@ export class GitHubService {
     installationId: string,
     owner: string,
     repo: string,
-    filePath: string
+    filePath: string,
+    branch?: string
   ): Promise<string> {
-    const repoPath = await this.ensureRepoFresh(installationId, owner, repo);
+    const effectiveBranch = branch || await this.getEffectiveBranch(installationId, owner, repo);
+    const repoPath = await this.ensureBranchFresh(installationId, owner, repo, effectiveBranch);
     const fullPath = path.join(repoPath, filePath);
 
     if (!fs.existsSync(fullPath)) {
@@ -297,15 +325,10 @@ export class GitHubService {
     return fs.readFileSync(fullPath, 'utf-8');
   }
 
-  async forceRefresh(installationId: string, owner: string, repo: string): Promise<void> {
-    await query(
-      `UPDATE github_repositories
-       SET needs_refresh = true
-       WHERE full_name = ?`,
-      [`${owner}/${repo}`]
-    );
-
-    await this.ensureRepoFresh(installationId, owner, repo);
+  async forceRefresh(installationId: string, owner: string, repo: string, branch?: string): Promise<void> {
+    const effectiveBranch = branch || await this.getEffectiveBranch(installationId, owner, repo);
+    fs.rmSync(this.branchPath(owner, repo, effectiveBranch), { recursive: true, force: true });
+    await this.cloneBranch(installationId, owner, repo, effectiveBranch);
   }
 
   async syncInstallations(userId: string): Promise<{ removed: number; added: number }> {

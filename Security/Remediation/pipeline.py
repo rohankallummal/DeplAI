@@ -3,7 +3,6 @@
 import argparse
 import asyncio
 import json
-import sys
 
 
 async def _on_message(msg_type: str, content: str):

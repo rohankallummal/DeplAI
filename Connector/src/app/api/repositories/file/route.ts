@@ -11,6 +11,7 @@ export async function GET(request: NextRequest) {
     const owner = searchParams.get('owner');
     const repo = searchParams.get('repo');
     const filePath = searchParams.get('path');
+    const branch = searchParams.get('branch') || undefined;
 
     if (!owner || !repo || !filePath) {
       return NextResponse.json(
@@ -31,7 +32,8 @@ export async function GET(request: NextRequest) {
       repoAccess.installationId,
       owner,
       repo,
-      filePath
+      filePath,
+      branch
     );
 
     return NextResponse.json({ content, path: filePath });

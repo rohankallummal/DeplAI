@@ -151,12 +151,12 @@ export default function SecurityAnalysisPage() {
     router.push('/webpages');
   }
 
-  const popupScenario = useMemo(() => {
-    if (activePopup === 'clean') return 'clean' as const;
-    if (activePopup === 'failed') return 'failed' as const;
-    if (activePopup === 'published') return 'published' as const;
+  const popupScenario = useMemo((): 'clean' | 'failed' | 'published' | 'local_remediated' | 'github_remediated' | null => {
+    if (activePopup === 'clean') return 'clean';
+    if (activePopup === 'failed') return 'failed';
+    if (activePopup === 'published') return 'published';
     if (activePopup === 'remediated') {
-      return project?.type === 'local' ? 'local_remediated' as const : 'github_remediated' as const;
+      return project?.type === 'local' ? 'local_remediated' : 'github_remediated';
     }
     return null;
   }, [activePopup, project]);

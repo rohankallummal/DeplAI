@@ -58,88 +58,59 @@ export async function extractZipToProject(
   projectId: string
 ): Promise<{ path: string; fileCount: number; sizeBytes: number }> {
   ensureBaseDirectory();
-  
-  const projectPath = getProjectPath(userId, projectId);
 
-  if (fs.existsSync(projectPath)) {
-    fs.rmSync(projectPath, { recursive: true, force: true });
-  }
+  const projectPath = getProjectPath(userId, projectId);
+  const zipFilePath = getZipPath(userId, projectId);
+
+  fs.rmSync(projectPath, { recursive: true, force: true });
   fs.mkdirSync(projectPath, { recursive: true });
 
   try {
-    const zipFilePath = getZipPath(userId, projectId);
     fs.writeFileSync(zipFilePath, zipBuffer);
 
     const zip = new AdmZip(zipBuffer);
     const zipEntries = zip.getEntries();
-    
-    let rootFolder: string | null = null;
+
     const topLevelItems = new Set<string>();
-    
     for (const entry of zipEntries) {
-      const parts = entry.entryName.split('/');
-      if (parts.length > 0 && parts[0]) {
-        topLevelItems.add(parts[0]);
-      }
+      const firstPart = entry.entryName.split('/')[0];
+      if (firstPart) topLevelItems.add(firstPart);
     }
-    
-    if (topLevelItems.size === 1) {
-      rootFolder = Array.from(topLevelItems)[0];
-    }
+
+    const rootFolder = topLevelItems.size === 1 ? Array.from(topLevelItems)[0] : null;
 
     for (const entry of zipEntries) {
       if (entry.isDirectory) continue;
-      
+
       let relativePath = entry.entryName;
-      
       if (rootFolder && relativePath.startsWith(rootFolder + '/')) {
         relativePath = relativePath.substring(rootFolder.length + 1);
       }
-      
-      if (shouldSkipFile(relativePath)) {
-        continue;
-      }
-      
+
+      if (shouldSkipFile(relativePath)) continue;
+
       const targetPath = path.join(projectPath, relativePath);
-      const targetDir = path.dirname(targetPath);
-      
-      if (!fs.existsSync(targetDir)) {
-        fs.mkdirSync(targetDir, { recursive: true });
-      }
-      
+      fs.mkdirSync(path.dirname(targetPath), { recursive: true });
       fs.writeFileSync(targetPath, entry.getData());
     }
 
     const stats = getDirectoryStats(projectPath);
-    
+
     return {
       path: path.join(userId, projectId),
       fileCount: stats.fileCount,
       sizeBytes: stats.size,
     };
   } catch (error: any) {
-    if (fs.existsSync(projectPath)) {
-      fs.rmSync(projectPath, { recursive: true, force: true });
-    }
-    const zipFilePath = getZipPath(userId, projectId);
-    if (fs.existsSync(zipFilePath)) {
-      fs.rmSync(zipFilePath, { force: true });
-    }
+    fs.rmSync(projectPath, { recursive: true, force: true });
+    fs.rmSync(zipFilePath, { force: true });
     throw new Error(`Failed to extract zip: ${error.message}`);
   }
 }
 
 export function deleteProject(userId: string, projectId: string): void {
-  const projectPath = getProjectPath(userId, projectId);
-
-  if (fs.existsSync(projectPath)) {
-    fs.rmSync(projectPath, { recursive: true, force: true });
-  }
-
-  const zipFilePath = getZipPath(userId, projectId);
-  if (fs.existsSync(zipFilePath)) {
-    fs.rmSync(zipFilePath, { force: true });
-  }
+  fs.rmSync(getProjectPath(userId, projectId), { recursive: true, force: true });
+  fs.rmSync(getZipPath(userId, projectId), { force: true });
 
   const userDir = path.join(LOCAL_PROJECTS_BASE, userId);
   if (fs.existsSync(userDir) && fs.readdirSync(userDir).length === 0) {
@@ -163,21 +134,14 @@ export function getDirectoryContents(
 
   return items
     .filter(item => !item.name.startsWith('.'))
-    .map(item => {
-      const itemPath = path.join(dirPath, item.name).replace(/\\/g, '/');
-      const itemFullPath = path.join(fullPath, item.name);
-
-      return {
-        name: item.name,
-        path: itemPath,
-        type: item.isDirectory() ? 'dir' as const : 'file' as const,
-        size: item.isFile() ? fs.statSync(itemFullPath).size : null,
-      };
-    })
+    .map(item => ({
+      name: item.name,
+      path: path.join(dirPath, item.name).replace(/\\/g, '/'),
+      type: (item.isDirectory() ? 'dir' : 'file') as 'dir' | 'file',
+      size: item.isFile() ? fs.statSync(path.join(fullPath, item.name)).size : null,
+    }))
     .sort((a, b) => {
-      if (a.type !== b.type) {
-        return a.type === 'dir' ? -1 : 1;
-      }
+      if (a.type !== b.type) return a.type === 'dir' ? -1 : 1;
       return a.name.localeCompare(b.name);
     });
 }

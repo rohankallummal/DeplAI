@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireAuth } from '@/lib/auth';
+import { requireAuth, verifyLocalProjectAccess } from '@/lib/auth';
 import { query } from '@/lib/db';
 import { deleteProject } from '@/lib/local-projects';
 import { SECURITY_URL, securityHeaders } from '@/lib/security';
@@ -14,38 +14,9 @@ export async function DELETE(
     const { user, error } = await requireAuth();
     if (error) return error;
 
-    const [project] = await query<any[]>(
-      `SELECT 
-        id,
-        name,
-        project_type,
-        local_path,
-        user_id
-       FROM projects
-       WHERE id = ?`,
-      [projectId]
-    );
-
-    if (!project) {
-      return NextResponse.json(
-        { error: 'Project not found' },
-        { status: 404 }
-      );
-    }
-
-    if (project.user_id !== user.id) {
-      return NextResponse.json(
-        { error: 'Forbidden: You do not own this project' },
-        { status: 403 }
-      );
-    }
-
-    if (project.project_type !== 'local') {
-      return NextResponse.json(
-        { error: 'Cannot delete GitHub repositories through this endpoint' },
-        { status: 400 }
-      );
-    }
+    const access = await verifyLocalProjectAccess(user.id, projectId);
+    if (access.error) return access.error;
+    const project = access.project;
 
     try {
       deleteProject(user.id, projectId);

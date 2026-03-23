@@ -263,12 +263,10 @@ export const LandingTextAnimation: React.FC<LandingTextAnimationProps> = ({
 
   const handleMouseLeave = useCallback(() => {
     isHoveredRef.current = false;
-    const s = stateRef.current;
 
-    if (s === 'active' && timelineRef.current) {
+    if (stateRef.current === 'active' && timelineRef.current) {
       setAnimState('exiting');
       timelineRef.current.reverse();
-    } else if (s === 'entering' && timelineRef.current) {
     }
   }, [setAnimState]);
 

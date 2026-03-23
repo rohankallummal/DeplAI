@@ -89,16 +89,14 @@ def get_or_create_remediation_container():
 
     try:
         container = client.containers.get(REMEDIATION_CONTAINER_NAME)
-        if container.status != "running":
-            container.start()
+        if container.status == "running":
+            return container
+        container.start()
         return container
     except docker.errors.NotFound:
         pass
     except Exception:
-        try:
-            client.containers.get(REMEDIATION_CONTAINER_NAME).remove(force=True)
-        except Exception:
-            pass
+        remove_remediation_container()
 
     try:
         client.volumes.create(name=AGENT_ARTIFACTS_VOLUME)
