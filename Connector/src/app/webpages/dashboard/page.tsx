@@ -580,7 +580,7 @@ export default function Projects({
                 </h3>
 
                 <p className="text-gray-600 dark:text-gray-400 text-center leading-relaxed mb-8">
-                  Ready to deploy &ldquo;{getProjectName(deploySelectedProject)}&rdquo;?
+                  Ready to deploy
                 </p>
 
                 <div className="flex gap-4 w-full">

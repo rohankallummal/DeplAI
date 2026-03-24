@@ -147,18 +147,6 @@ export default function Home() {
         </div>
       </div>
 
-      <motion.footer
-        className="container mx-auto px-6 py-8 border-t border-white/10 absolute bottom-0 left-0 right-0 z-10"
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={{ duration: 0.5, delay: 1 }}
-      >
-        <div className="text-center">
-          <div className="text-gray-400 text-sm">
-             Built for developers, by developers.
-          </div>
-        </div>
-      </motion.footer>
       </div>
     </>
   );

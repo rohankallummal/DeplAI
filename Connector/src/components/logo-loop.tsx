@@ -34,7 +34,6 @@ export interface LogoLoopProps {
   ariaLabel?: string;
   className?: string;
   style?: React.CSSProperties;
-  useCustomRender?: boolean;
 }
 
 const ANIMATION_CONFIG = {
@@ -150,7 +149,7 @@ const useAnimationLoop = (
     }
 
     if (prefersReduced) {
-      track.style.transform = isVertical ? 'translate3d(0, 0, 0)' : 'translate3d(0, 0, 0)';
+      track.style.transform = 'translate3d(0, 0, 0)';
       return () => {
         lastTimestampRef.current = null;
       };
