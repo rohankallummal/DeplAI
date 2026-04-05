@@ -11,6 +11,8 @@ import { FileFormatZip, AppConnector, CloudUploadIcon, XmarkCircleIcon } from '@
 import ScanModal from '@/components/scan-card';
 import { GradientText } from '@/components/text-animation';
 import { usePopup } from '@/components/toast-notification';
+import Lottie from 'lottie-react';
+import deployingAnimation from '@/components/animation/deploying.json';
 
 interface ProjectsProps {
   user: any;
@@ -26,6 +28,8 @@ interface ProjectsProps {
   startScan: (projectId: string, projectName: string) => void;
   activeScanIds: string[];
   activeRemediationIds: string[];
+  activeDeployIds: string[];
+  activeDeployProjectNames: Record<string, string>;
 }
 
 interface ScanResult {
@@ -49,6 +53,8 @@ export default function Projects({
   startScan,
   activeScanIds,
   activeRemediationIds,
+  activeDeployIds,
+  activeDeployProjectNames,
 }: ProjectsProps) {
   const router = useRouter();
   const { showPopup } = usePopup();
@@ -121,9 +127,29 @@ export default function Projects({
     setDeployConfirmOpen(true);
   };
 
-  const handleDeployConfirmYes = () => {
-    if (deploySelectedProject) {
+  const handleDeployConfirmYes = async () => {
+    if (!deploySelectedProject) {
+      setDeployConfirmOpen(false);
+      return;
+    }
+
+    try {
+      const healthRes = await fetch('/api/deploy/health');
+      if (!healthRes.ok) {
+        showPopup({
+          type: 'error',
+          message: 'Deployment service is currently unavailable. Please try again later.',
+        });
+        setDeployConfirmOpen(false);
+        return;
+      }
+
       router.push(`/webpages/deploy?project_id=${deploySelectedProject.id}`);
+    } catch (err) {
+      showPopup({
+        type: 'error',
+        message: 'Deployment service is currently unavailable. Please try again later.',
+      });
     }
     setDeployConfirmOpen(false);
   };
@@ -222,7 +248,7 @@ export default function Projects({
 
   return (
     <div className="grid lg:grid-cols-3 gap-6 mt-15">
-      <div className="lg:col-span-1 space-y-6">
+      <div className="lg:col-span-1 space-y-6 lg:mt-12">
         <input
           ref={fileInputRef}
           type="file"
@@ -254,31 +280,45 @@ export default function Projects({
         </button>
 
         {/* Deploy */}
-        <button
-          onClick={handleToggleDeployMode}
-          className={`w-full p-8 rounded-xl border transition-all duration-200 cursor-pointer group ${
-            deployMode
-              ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
-              : 'border-border hover:border-blue-400 dark:hover:border-blue-500 bg-surface hover:bg-blue-50 dark:hover:bg-blue-900/20'
-          }`}
-        >
-          <div className="flex flex-col items-center">
-            {deployMode ? (
-              <XmarkCircleIcon className="w-12 h-12 text-blue-500 dark:text-blue-400 transition-colors" />
-            ) : (
-              <CloudUploadIcon className="w-12 h-12 text-gray-400 dark:text-gray-500 group-hover:text-blue-500 dark:group-hover:text-blue-400 transition-colors" />
-            )}
-            <p
-              className={`mt-3 text-sm font-medium transition-colors ${
-                deployMode
-                  ? 'text-blue-600 dark:text-blue-400'
-                  : 'text-gray-600 dark:text-gray-300 group-hover:text-blue-600 dark:group-hover:text-blue-400'
-              }`}
-            >
-              {deployMode ? 'Exit Deploy Mode' : 'Deploy'}
-            </p>
-          </div>
-        </button>
+        {activeDeployIds.length > 0 ? (
+          <button
+            onClick={() => {
+              const deployId = activeDeployIds[0];
+              router.push(`/webpages/deploy?project_id=${deployId}`);
+            }}
+            className="w-full p-12 rounded-xl border border-blue-500 bg-gradient-to-r from-blue-50 to-blue-100 dark:from-blue-900/30 dark:to-blue-800/30 transition-all duration-200 cursor-pointer group relative overflow-hidden"
+          >
+            <div className="absolute inset-0 flex items-center justify-center">
+              <Lottie animationData={deployingAnimation} loop className="w-60 h-60" />
+            </div>
+          </button>
+        ) : (
+          <button
+            onClick={handleToggleDeployMode}
+            className={`w-full p-8 rounded-xl border transition-all duration-200 cursor-pointer group ${
+              deployMode
+                ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
+                : 'border-border hover:border-blue-400 dark:hover:border-blue-500 bg-surface hover:bg-blue-50 dark:hover:bg-blue-900/20'
+            }`}
+          >
+            <div className="flex flex-col items-center">
+              {deployMode ? (
+                <XmarkCircleIcon className="w-12 h-12 text-blue-500 dark:text-blue-400 transition-colors" />
+              ) : (
+                <CloudUploadIcon className="w-12 h-12 text-gray-400 dark:text-gray-500 group-hover:text-blue-500 dark:group-hover:text-blue-400 transition-colors" />
+              )}
+              <p
+                className={`mt-3 text-sm font-medium transition-colors ${
+                  deployMode
+                    ? 'text-blue-600 dark:text-blue-400'
+                    : 'text-gray-600 dark:text-gray-300 group-hover:text-blue-600 dark:group-hover:text-blue-400'
+                }`}
+              >
+                {deployMode ? 'Exit Deploy Mode' : 'Deploy'}
+              </p>
+            </div>
+          </button>
+        )}
 
         {/* Connect to App */}
         <button
@@ -448,7 +488,7 @@ export default function Projects({
                                 Delete
                               </button>
                             )}
-                            {activeRemediationIds.includes(project.id) ? (
+                            {activeDeployIds.includes(project.id) ? null : activeRemediationIds.includes(project.id) ? (
                               <GradientText
                                 colors={["#5227FF", "#FF9FFC", "#B19EEF"]}
                                 animationSpeed={8}

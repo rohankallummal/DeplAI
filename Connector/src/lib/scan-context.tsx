@@ -122,7 +122,7 @@ function useOperationState<T extends { state: OperationState; messages: ScanMess
   defaultState: () => T,
 ) {
   const [states, setStates] = useState<Record<string, T>>({});
-  const wsRefsInternal = useRef<Record<string, WebSocket>>({});
+  const wsRefs = useRef<Record<string, WebSocket>>({});
 
   const appendMessage = useCallback((projectId: string, message: ScanMessage) => {
     setStates(prev => {
@@ -149,7 +149,7 @@ function useOperationState<T extends { state: OperationState; messages: ScanMess
       .map(([id]) => id);
   }, [states]);
 
-  return { states, setStates, wsRefs: wsRefsInternal, appendMessage, updateStatus, getState, activeIds };
+  return { states, setStates, wsRefs, appendMessage, updateStatus, getState, activeIds };
 }
 
 export function ScanProvider({ children }: { children: React.ReactNode }) {

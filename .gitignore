@@ -1,6 +1,7 @@
 .env
 .env.*
 Security/.env
+Deploy/.env
 Connector/.env.local
 
 Connector/node_modules

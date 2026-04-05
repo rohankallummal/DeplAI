@@ -2,8 +2,8 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useRouter, useParams } from 'next/navigation';
-import { LoadingScreen } from '@/components/loading-spinner';
 import { ExitIcon } from '@/components/log-in-out';
+import { usePageLoading } from '@/lib/page-loading-context';
 import ThemeToggle from '@/components/theme-toggle';
 import RemediationRequest from '@/components/remediation-request';
 
@@ -33,9 +33,14 @@ export default function SecurityAnalysisPage() {
   const remediating = remediationState === 'running';
   const remediationDone = remediationState === 'completed';
 
+  usePageLoading(loading);
+
   useEffect(() => {
-    fetchProjectInfo();
-    restoreState(projectId);
+    async function init() {
+      await Promise.all([fetchProjectInfo(), restoreState(projectId)]);
+      setLoading(false);
+    }
+    init();
 
     const stored = localStorage.getItem(`deplai_published_${projectId}`);
     if (stored) {
@@ -89,8 +94,6 @@ export default function SecurityAnalysisPage() {
       }
     } catch (error) {
       console.error('Failed to fetch project:', error);
-    } finally {
-      setLoading(false);
     }
   }
 
@@ -105,9 +108,7 @@ export default function SecurityAnalysisPage() {
     router.push('/');
   }
 
-  const handleFindingsReady = useCallback((ready: boolean) => {
-    setFindingsReady(ready);
-  }, []);
+  const handleFindingsReady = setFindingsReady;
 
   const handleCleanScan = useCallback(() => {
     setActivePopup('clean');
@@ -180,9 +181,7 @@ export default function SecurityAnalysisPage() {
     }
   }
 
-  if (loading) {
-    return <LoadingScreen />;
-  }
+  if (loading) return null;
 
   const showPencilIcon = findingsReady && scanState !== 'running' && !remediating && !remediationDone && !isAnyRemediating;
 

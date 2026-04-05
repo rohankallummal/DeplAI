@@ -164,7 +164,7 @@ export const LandingTextAnimation: React.FC<LandingTextAnimationProps> = ({
     timelineRef.current = null;
     shinyTweenRef.current?.kill();
     shinyTweenRef.current = null;
-    try { splitRef.current?.revert(); } catch (_) {}
+    try { splitRef.current?.revert(); } catch {}
     splitRef.current = null;
   }, []);
 
@@ -220,7 +220,7 @@ export const LandingTextAnimation: React.FC<LandingTextAnimationProps> = ({
         }
       },
       onReverseComplete: () => {
-        try { splitRef.current?.revert(); } catch (_) {}
+        try { splitRef.current?.revert(); } catch {}
         splitRef.current = null;
         timelineRef.current = null;
         el.style.display = 'none';
@@ -278,7 +278,7 @@ export const LandingTextAnimation: React.FC<LandingTextAnimationProps> = ({
 
     timelineRef.current?.kill();
     timelineRef.current = null;
-    try { splitRef.current?.revert(); } catch (_) {}
+    try { splitRef.current?.revert(); } catch {}
     splitRef.current = null;
 
     applyShiny();

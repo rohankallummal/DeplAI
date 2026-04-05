@@ -144,7 +144,7 @@ export function PopupProvider({ children }: { children: React.ReactNode }) {
   const [popups, setPopups] = useState<PopupConfig[]>([]);
 
   const showPopup = useCallback((config: Omit<PopupConfig, 'id'>) => {
-    const id = `popup-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const id = `popup-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
     setPopups((prev) => [...prev, { ...config, id }]);
   }, []);
 

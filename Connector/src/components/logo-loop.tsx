@@ -43,7 +43,7 @@ const ANIMATION_CONFIG = {
 } as const;
 
 const toCssLength = (value?: number | string): string | undefined =>
-  typeof value === 'number' ? `${value}px` : (value ?? undefined);
+  typeof value === 'number' ? `${value}px` : value;
 
 const cx = (...parts: Array<string | false | null | undefined>) => parts.filter(Boolean).join(' ');
 
@@ -54,10 +54,9 @@ const useResizeObserver = (
 ) => {
   useEffect(() => {
     if (!window.ResizeObserver) {
-      const handleResize = () => callback();
-      window.addEventListener('resize', handleResize);
+      window.addEventListener('resize', callback);
       callback();
-      return () => window.removeEventListener('resize', handleResize);
+      return () => window.removeEventListener('resize', callback);
     }
 
     const observers = elements.map(ref => {

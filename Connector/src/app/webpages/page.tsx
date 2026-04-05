@@ -2,25 +2,19 @@
 
 import { useEffect, useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import LoadingSpinner from '@/components/loading-spinner';
 import { ExitIcon } from '@/components/log-in-out';
 import ThemeToggle from '@/components/theme-toggle';
-import Projects from './dashboard/page';
-import { PopupProvider, usePopup } from '@/components/toast-notification';
+import Projects from './dashboard/dashboard';
+import { usePopup } from '@/components/toast-notification';
 import { useScan } from '@/lib/scan-context';
+import { useDeploy } from '@/lib/deploy-context';
+import { usePageLoading } from '@/lib/page-loading-context';
 
 export default function Dashboard() {
-  return (
-    <PopupProvider>
-      <DashboardContent />
-    </PopupProvider>
-  );
-}
-
-function DashboardContent() {
   const router = useRouter();
   const { showPopup } = usePopup();
   const { startScan, activeScanIds, resetAll, activeRemediationIds } = useScan();
+  const { activeDeployIds, activeDeployProjectNames } = useDeploy();
   const [user, setUser] = useState<any>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [installations, setInstallations] = useState<any[]>([]);
@@ -29,6 +23,8 @@ function DashboardContent() {
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  usePageLoading(authLoading);
 
   useEffect(() => {
     checkAuth();
@@ -55,8 +51,6 @@ function DashboardContent() {
 
       setUser(session.user);
 
-      // Wait for initial data before showing the dashboard
-      // This prevents the installation panel from flashing before data arrives
       await Promise.all([
         fetchInstallations().catch(() => {}),
         fetchProjects().catch(() => {}),
@@ -64,7 +58,6 @@ function DashboardContent() {
 
       setAuthLoading(false);
 
-      // Sync in background and refresh data silently
       fetch('/api/sync', { method: 'POST' })
         .then(() => {
           fetchInstallations();
@@ -183,13 +176,7 @@ function DashboardContent() {
     router.push('/');
   }
 
-  if (authLoading) {
-    return (
-      <div className="min-h-screen bg-header flex items-center justify-center">
-        <LoadingSpinner size="lg" />
-      </div>
-    );
-  }
+  if (authLoading) return null;
 
   return (
     <div className="min-h-screen bg-header">
@@ -242,6 +229,8 @@ function DashboardContent() {
           startScan={startScan}
           activeScanIds={activeScanIds}
           activeRemediationIds={activeRemediationIds}
+          activeDeployIds={activeDeployIds}
+          activeDeployProjectNames={activeDeployProjectNames}
         />
       </div>
     </div>

@@ -1,15 +1,16 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import LoadingSpinner, { LoadingScreen } from '@/components/loading-spinner';
 import ThemeToggle from '@/components/theme-toggle';
+import { usePageLoading } from '@/lib/page-loading-context';
 import ChatIcon from '@/components/chat-icon';
 import ChatInterface from './chat-interface';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
-import { PopupProvider, usePopup } from '@/components/toast-notification';
+import { usePopup } from '@/components/toast-notification';
 
 interface FileItem {
   name: string;
@@ -34,9 +35,9 @@ function getLanguageFromFilename(filename: string): string {
 
 export default function RepositoryBrowser() {
   return (
-    <PopupProvider>
+    <Suspense fallback={<LoadingScreen />}>
       <RepositoryBrowserContent />
-    </PopupProvider>
+    </Suspense>
   );
 }
 
@@ -55,6 +56,7 @@ function RepositoryBrowserContent() {
 
   const { showPopup } = usePopup();
   const [authLoading, setAuthLoading] = useState(true);
+  const [pageReady, setPageReady] = useState(false);
   const [projectName, setProjectName] = useState('');
   const [contents, setContents] = useState<FileItem[]>([]);
   const [fileContent, setFileContent] = useState<string | null>(null);
@@ -70,6 +72,8 @@ function RepositoryBrowserContent() {
   const [defaultBranch, setDefaultBranch] = useState<string>('');
   const [branchDropdownOpen, setBranchDropdownOpen] = useState(false);
   const [branchSearch, setBranchSearch] = useState('');
+
+  usePageLoading(authLoading || !pageReady);
 
   useEffect(() => {
     checkAuth();
@@ -103,11 +107,7 @@ function RepositoryBrowserContent() {
         return;
       }
 
-      if (session.user?.name) {
-        setUsername(session.user.name);
-      } else if (session.user?.login) {
-        setUsername(session.user.login);
-      }
+      setUsername(session.user?.name || session.user?.login || '');
       setAuthLoading(false);
     } catch (error) {
       console.error('Auth check failed:', error);
@@ -186,6 +186,7 @@ function RepositoryBrowserContent() {
       setError(err.message);
     } finally {
       setLoading(false);
+      setPageReady(true);
     }
   }
 
@@ -268,9 +269,7 @@ function RepositoryBrowserContent() {
     })),
   ];
 
-  if (authLoading) {
-    return <LoadingScreen />;
-  }
+  if (authLoading || !pageReady) return null;
 
   if ((!isLocal && (!owner || !repo)) || (isLocal && !projectId)) {
     return (
