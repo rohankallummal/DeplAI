@@ -79,9 +79,6 @@ export default function DeployQACard({
               <h3 className="text-2xl font-medium text-white dark:text-black leading-relaxed flex-1">
                 {currentQuestion.question}
               </h3>
-              <span className="text-xs font-mono text-white/50 dark:text-black/50 shrink-0 mt-0.5">
-                {currentQuestionIndex + 1}/{questions.length}
-              </span>
             </div>
           </div>
 
@@ -156,7 +153,7 @@ export default function DeployQACard({
                   />
                   <button
                     onClick={handleCustomSend}
-                    className={`absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition-all duration-200 ${inputValue.trim() ? 'opacity-100 scale-100' : 'opacity-0 scale-75 pointer-events-none'}`}
+                    className={`absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-lg bg-[#F1F1F1] dark:bg-[#1b1b1b] text-black dark:text-white hover:bg-[#e4e4e4] dark:hover:bg-[#2a2a2a] transition-all duration-200 ${inputValue.trim() ? 'opacity-100 scale-100' : 'opacity-0 scale-75 pointer-events-none'}`}
                   >
                     <FiArrowUp className="w-4 h-4" />
                   </button>

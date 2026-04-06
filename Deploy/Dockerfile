@@ -25,9 +25,6 @@ RUN wget -q https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraf
     && chmod +x /usr/local/bin/terraform \
     && rm terraform_${TERRAFORM_VERSION}_linux_amd64.zip
 
-# Install Infracost CLI
-RUN curl -fsSL https://raw.githubusercontent.com/infracost/infracost/master/scripts/install.sh | sh
-
 RUN terraform --version
 
 COPY requirements.txt .

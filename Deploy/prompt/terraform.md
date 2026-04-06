@@ -68,7 +68,7 @@ Every module call or resource block MUST have a comment explaining the choice. P
 
 ### Output Files
 
-All files go in `/workspace/deploy/terraform/`:
+All files go in `/workspace/deploy/terraform/code/`:
 
 - **`provider.tf`** — AWS provider with version constraint, region from variable, default tags
 - **`backend.tf`** — S3 backend with placeholder config (you pass values via `-backend-config` at init)
@@ -98,7 +98,7 @@ STEP        COMMAND                   ON FAILURE
   3         terraform init            → Check provider, backend config; enable DEBUG logging if opaque
   4         terraform plan            → Follow Plan Failure Process below
   5         terraform apply           → Follow Apply Failure Process below
-  6         terraform output -json    → Save to /workspace/deploy/terraform/outputs.json
+  6         terraform output -json    → Save to /workspace/deploy/terraform/code/outputs.json
 ```
 
 ## Init Command
@@ -116,7 +116,7 @@ The state key is provided in your task prompt. Environment variables are availab
 ## Plan Command
 
 ```bash
-terraform plan -out=/workspace/deploy/terraform/terraform.plan
+terraform plan -out=/workspace/deploy/terraform/code/terraform.plan
 ```
 
 Stop after a successful plan during the generation phase. The runner handles cost estimation and user confirmation before you are called again for apply.
@@ -124,12 +124,12 @@ Stop after a successful plan during the generation phase. The runner handles cos
 ## Apply Command
 
 ```bash
-terraform apply -auto-approve /workspace/deploy/terraform/terraform.plan
+terraform apply -auto-approve /workspace/deploy/terraform/code/terraform.plan
 ```
 
 After successful apply:
 ```bash
-terraform output -json > /workspace/deploy/terraform/outputs.json
+terraform output -json > /workspace/deploy/terraform/code/outputs.json
 ```
 
 ---
@@ -172,14 +172,14 @@ Apply failures can leave infrastructure in a **partial state** — some resource
 
 4. **Re-plan and re-apply:**
    ```bash
-   terraform plan -out=/workspace/deploy/terraform/terraform.plan
-   terraform apply -auto-approve /workspace/deploy/terraform/terraform.plan
+   terraform plan -out=/workspace/deploy/terraform/code/terraform.plan
+   terraform apply -auto-approve /workspace/deploy/terraform/code/terraform.plan
    ```
    The re-plan should show only the failed resource(s) as changes.
 
 5. After successful apply, save outputs:
    ```bash
-   terraform output -json > /workspace/deploy/terraform/outputs.json
+   terraform output -json > /workspace/deploy/terraform/code/outputs.json
    ```
 
 6. If you cannot fix it after 3 attempts, report the full diagnostics and stop.

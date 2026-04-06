@@ -53,6 +53,7 @@ interface FindingsProps {
   remediationDone?: boolean;
   onCleanScan?: () => void;
   onFindingsReady?: (ready: boolean) => void;
+  onLoaded?: () => void;
 }
 
 const SEVERITY_CONFIG: Record<string, { text: string; label: string }> = {
@@ -288,7 +289,7 @@ function CWEAccordion({ group }: { group: CWEGroup }) {
   );
 }
 
-export default function Findings({ projectId, remediating, remediationDone, onCleanScan, onFindingsReady }: FindingsProps) {
+export default function Findings({ projectId, remediating, remediationDone, onCleanScan, onFindingsReady, onLoaded }: FindingsProps) {
   const { getScanState, getCachedResults, setCachedResults } = useScan();
   const { state } = getScanState(projectId || '');
 
@@ -387,6 +388,12 @@ export default function Findings({ projectId, remediating, remediationDone, onCl
     fetchStatusAndResults(cancelled, { trackError: true, afterScanComplete: true });
     return () => { cancelled.current = true; };
   }, [projectId, state]);
+
+  useEffect(() => {
+    if (!loading && !loadingResults) {
+      onLoaded?.();
+    }
+  }, [loading, loadingResults]);
 
   if (remediating) {
     return (

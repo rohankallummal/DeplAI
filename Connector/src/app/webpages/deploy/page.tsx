@@ -263,8 +263,6 @@ function CompletedState({
   projectName: string;
   costData: CostData | null;
 }) {
-  const router = useRouter();
-
   return (
     <div className="py-8">
       <div className="flex flex-col items-center mb-12">

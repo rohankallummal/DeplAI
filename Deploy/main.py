@@ -18,7 +18,6 @@ from models import (
     WebSocketCommand, StreamStatus, DestroyRequest,
 )
 from runner import DeployRunner
-from runner_base import RunnerBase
 from utils import (
     remove_deploy_container, cleanup_volumes, clear_deploy_artifacts,
     read_volume_file, run_terraform_command,
@@ -144,13 +143,12 @@ async def websocket_deploy(websocket: WebSocket, project_id: str):
 
             elif command.action == "answer":
                 runner = active_deploys.get(project_id)
-                if runner and hasattr(runner, 'receive_answers'):
-                    answers = command.data or {}
-                    await runner.receive_answers(answers)
+                if runner:
+                    await runner.receive_answers(command.data or {})
 
             elif command.action == "deploy_confirmation":
                 runner = active_deploys.get(project_id)
-                if runner and hasattr(runner, 'receive_deploy_confirmation'):
+                if runner:
                     confirmed = command.data.get("confirmed", False) if command.data else False
                     await runner.receive_deploy_confirmation(confirmed)
 
@@ -172,16 +170,6 @@ async def deploy_status(project_id: str):
             "phase": runner.status,
         }
     return {"active": False, "phase": None}
-
-
-@app.get("/api/deploy/chat-history/{project_id}", dependencies=[Depends(verify_api_key)])
-async def get_chat_history(project_id: str):
-    content = await asyncio.to_thread(
-        read_volume_file, f"Chat History/{project_id}.json"
-    )
-    if content:
-        return {"success": True, "data": json.loads(content)}
-    return {"success": True, "data": None}
 
 
 def parse_terraform_outputs(raw: dict) -> dict:
@@ -226,14 +214,17 @@ def parse_terraform_outputs(raw: dict) -> dict:
 
 
 def extract_cost_resources(cost_data: dict) -> list:
-    """Extract resource names from infracost output."""
+    """Extract resource names and costs from infracost JSON v0.2 output."""
     resources = []
-    breakdown = cost_data.get("breakdown", {})
-    for resource in breakdown.get("resources", []):
-        resources.append({
-            "name": resource.get("name", "Unknown"),
-            "monthly_cost": float(resource.get("monthlyCost", 0) or 0)
-        })
+    for project in cost_data.get("projects", []):
+        breakdown = project.get("breakdown", {})
+        for resource in breakdown.get("resources", []):
+            monthly_cost = float(resource.get("monthlyCost", 0) or 0)
+            if monthly_cost > 0:
+                resources.append({
+                    "name": resource.get("name", "Unknown"),
+                    "monthly_cost": monthly_cost,
+                })
     return sorted(resources, key=lambda r: r["monthly_cost"], reverse=True)
 
 
@@ -241,7 +232,7 @@ def extract_cost_resources(cost_data: dict) -> list:
 async def get_deploy_outputs(project_id: str):
     """Get parsed terraform outputs and cost data."""
     try:
-        raw_outputs = await asyncio.to_thread(read_volume_file, "terraform/outputs.json")
+        raw_outputs = await asyncio.to_thread(read_volume_file, "terraform/code/outputs.json")
         if not raw_outputs:
             return {"success": False, "error": "No terraform outputs found"}
 
@@ -250,7 +241,7 @@ async def get_deploy_outputs(project_id: str):
 
         cost_resources = []
         try:
-            raw_cost = await asyncio.to_thread(read_volume_file, "terraform/cost_estimate.json")
+            raw_cost = await asyncio.to_thread(read_volume_file, "terraform/cost/cost_estimate.json")
             if raw_cost:
                 cost_data = json.loads(raw_cost)
                 cost_resources = extract_cost_resources(cost_data)

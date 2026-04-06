@@ -87,8 +87,6 @@ export async function extractZipToProject(
         relativePath = relativePath.substring(rootFolder.length + 1);
       }
 
-      if (shouldSkipFile(relativePath)) continue;
-
       const targetPath = path.join(projectPath, relativePath);
       fs.mkdirSync(path.dirname(targetPath), { recursive: true });
       fs.writeFileSync(targetPath, entry.getData());
@@ -165,14 +163,3 @@ export function getFileContents(
   return fs.readFileSync(fullPath, 'utf-8');
 }
 
-const SKIP_PATTERNS = [
-  /^\./, /\/\./,
-  /node_modules/, /\.git\//, /dist\//, /build\//, /\.next\//,
-  /coverage\//, /__pycache__\//, /\.pytest_cache\//, /\.venv\//, /venv\//,
-  /\.vscode\//, /\.idea\//,
-  /\.DS_Store/, /Thumbs\.db/,
-];
-
-function shouldSkipFile(filePath: string): boolean {
-  return SKIP_PATTERNS.some(pattern => pattern.test(filePath));
-}

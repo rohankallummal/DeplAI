@@ -11,7 +11,6 @@ from runner_base import RunnerBase
 from utils import (
     get_docker_client,
     get_or_create_deploy_container,
-    clear_deploy_artifacts,
     CODEBASE_VOLUME,
     decode_output,
 )
@@ -70,8 +69,7 @@ class DeployRunner(RunnerBase):
                 "sh", "-c",
                 "chmod 666 /var/run/docker.sock 2>/dev/null; "
                 "chown -R agent:agent /workspace /home/agent 2>/dev/null; "
-                "chmod -R a+r /app 2>/dev/null; "
-                "mkdir -p /workspace/deploy/'Chat History'",
+                "chmod -R a+r /app 2>/dev/null",
             ],
             user="root",
         )
@@ -82,7 +80,7 @@ class DeployRunner(RunnerBase):
             user="agent",
             environment={"HOME": "/home/agent"},
         )
-        diag_text = diag_output.decode(errors="replace").strip() if isinstance(diag_output, bytes) else str(diag_output)
+        diag_text = decode_output(diag_output).strip()
         if exit_code != 0:
             return await self._terminate(f"Claude CLI check failed (exit {exit_code}): {diag_text}")
         logger.info(f"Claude CLI ready ({diag_text})")
@@ -92,7 +90,7 @@ class DeployRunner(RunnerBase):
             ["terraform", "--version"],
             user="agent",
         )
-        tf_text = tf_output.decode(errors="replace").strip() if isinstance(tf_output, bytes) else str(tf_output)
+        tf_text = decode_output(tf_output).strip()
         if exit_code != 0:
             return await self._terminate(f"Terraform CLI check failed (exit {exit_code}): {tf_text}")
         logger.info(f"Terraform CLI ready ({tf_text.splitlines()[0]})")
@@ -147,18 +145,6 @@ class DeployRunner(RunnerBase):
             environment={"HOME": "/home/agent"},
         )
 
-        chat_history = json.dumps({
-            "project_id": self.project_id,
-            "questions": self._answers_data.get("questions", []),
-            "answers": self._answers_data.get("answers", []),
-        }, indent=2)
-        await asyncio.to_thread(
-            self._container.exec_run,
-            ["sh", "-c", f"cat > '/workspace/deploy/Chat History/{self.project_id}.json' << 'CHAT_EOF'\n{chat_history}\nCHAT_EOF"],
-            user="agent",
-            environment={"HOME": "/home/agent"},
-        )
-
         # Phase 3: Architecture Synthesis (Agent 2 - Phase 2)
         await self._send_status(StreamStatus.architecting)
         logger.info("Generating deployment architecture")
@@ -197,14 +183,10 @@ class DeployRunner(RunnerBase):
         await self._send_status(StreamStatus.costing)
         logger.info("Estimating costs")
 
-        cost_estimate = await asyncio.to_thread(
-            estimate_cost, "/workspace/deploy/terraform"
-        )
+        cost_estimate = await asyncio.to_thread(estimate_cost)
         cost_data = cost_estimate_to_dict(cost_estimate)
 
-        cost_table = await asyncio.to_thread(
-            get_cost_table, "/workspace/deploy/terraform"
-        )
+        cost_table = await asyncio.to_thread(get_cost_table)
         cost_data["table"] = cost_table
         logger.info("Infracost table output:\n%s", cost_table)
 
@@ -233,10 +215,6 @@ class DeployRunner(RunnerBase):
         if not apply_result or not apply_result.get("success"):
             return await self._terminate("Terraform apply failed")
 
-        state_key = f"{self.project_id}_{self.context.project_name}_{self.context.user_id}"
-        state_key = state_key.replace(" ", "_").replace("-", "_")
-        await asyncio.to_thread(self._backup_terraform_state, state_key)
-
         logger.info("Terraform provisioning completed successfully")
         await self._send_result({"success": True, "phase": "complete"})
 
@@ -250,7 +228,7 @@ class DeployRunner(RunnerBase):
                 ["sh", "-c", "curl -s --max-time 5 -o /dev/null http://terraform-mcp:8080/mcp && echo ok || echo fail"],
                 user="agent",
             )
-            text = output.decode(errors="replace").strip() if isinstance(output, bytes) else str(output)
+            text = decode_output(output).strip()
             if "ok" in text:
                 logger.info("Terraform MCP server is reachable")
                 return True
@@ -271,7 +249,6 @@ class DeployRunner(RunnerBase):
             cmd.extend(extra_args)
 
         msg_q: thread_queue.Queue = thread_queue.Queue()
-        questions_data = None
 
         environment = {
             "HOME": "/home/agent",
@@ -281,7 +258,6 @@ class DeployRunner(RunnerBase):
             environment.update(extra_env)
 
         def _read_exec_output():
-            nonlocal questions_data
             buffer = ""
             try:
                 _, output = self._container.exec_run(
@@ -297,16 +273,12 @@ class DeployRunner(RunnerBase):
                             continue
                         try:
                             parsed = json.loads(line)
-                            if parsed.get("type") == "questions":
-                                questions_data = parsed.get("data")
                             msg_q.put(parsed)
                         except json.JSONDecodeError:
                             msg_q.put({"type": "error", "content": line})
                 if buffer.strip():
                     try:
                         parsed = json.loads(buffer.strip())
-                        if parsed.get("type") == "questions":
-                            questions_data = parsed.get("data")
                         msg_q.put(parsed)
                     except json.JSONDecodeError:
                         msg_q.put({"type": "error", "content": buffer.strip()})
@@ -349,7 +321,7 @@ class DeployRunner(RunnerBase):
             self._container.exec_run(
                 [
                     "sh", "-c",
-                    "mkdir -p /workspace/deploy/terraform/state"
+                    "mkdir -p /workspace/deploy/terraform/code /workspace/deploy/terraform/cost"
                 ],
                 user="agent",
             )
@@ -411,15 +383,3 @@ class DeployRunner(RunnerBase):
         except Exception as e:
             return (False, str(e))
 
-    def _backup_terraform_state(self, state_key: str):
-        """Backup terraform state from S3 to local volume."""
-        try:
-            state_path = f"/workspace/deploy/terraform/state/{state_key}"
-            # Create state directory
-            self._container.exec_run(
-                ["mkdir", "-p", state_path],
-                user="agent",
-            )
-            logger.info(f"Terraform state backed up to {state_path}")
-        except Exception as e:
-            logger.error(f"Failed to backup terraform state: {e}")

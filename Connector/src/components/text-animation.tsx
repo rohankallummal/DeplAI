@@ -141,6 +141,95 @@ interface LandingTextAnimationProps {
   className?: string;
 }
 
+// ---------------------------------------------------------------------------
+// TextType
+// ---------------------------------------------------------------------------
+
+interface TextTypeProps {
+  texts: string[];
+  typingSpeed?: number;
+  deletingSpeed?: number;
+  pauseDuration?: number;
+  showCursor?: boolean;
+  cursorCharacter?: string;
+  cursorBlinkDuration?: number;
+  className?: string;
+  onCycleComplete?: () => void;
+}
+
+export function TextType({
+  texts,
+  typingSpeed = 75,
+  deletingSpeed = 50,
+  pauseDuration = 1500,
+  showCursor = true,
+  cursorCharacter = '_',
+  cursorBlinkDuration = 0.5,
+  className = '',
+  onCycleComplete,
+}: TextTypeProps) {
+  const [displayText, setDisplayText] = useState('');
+  const [textIndex, setTextIndex] = useState(0);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const onCycleCompleteRef = useRef(onCycleComplete);
+
+  useEffect(() => {
+    onCycleCompleteRef.current = onCycleComplete;
+  }, [onCycleComplete]);
+
+  useEffect(() => {
+    if (texts.length === 0) return;
+
+    const currentFullText = texts[textIndex];
+
+    if (!isDeleting) {
+      if (displayText.length < currentFullText.length) {
+        const timeout = setTimeout(() => {
+          setDisplayText(currentFullText.slice(0, displayText.length + 1));
+        }, typingSpeed);
+        return () => clearTimeout(timeout);
+      } else {
+        const timeout = setTimeout(() => {
+          setIsDeleting(true);
+        }, pauseDuration);
+        return () => clearTimeout(timeout);
+      }
+    } else {
+      if (displayText.length > 0) {
+        const timeout = setTimeout(() => {
+          setDisplayText(displayText.slice(0, -1));
+        }, deletingSpeed);
+        return () => clearTimeout(timeout);
+      } else {
+        setIsDeleting(false);
+        const nextIndex = (textIndex + 1) % texts.length;
+        setTextIndex(nextIndex);
+        if (nextIndex === 0) {
+          onCycleCompleteRef.current?.();
+        }
+      }
+    }
+  }, [displayText, isDeleting, textIndex, texts, typingSpeed, deletingSpeed, pauseDuration]);
+
+  return (
+    <span className={className}>
+      {displayText}
+      {showCursor && (
+        <motion.span
+          animate={{ opacity: [1, 0] }}
+          transition={{ duration: cursorBlinkDuration, repeat: Infinity, repeatType: 'reverse', ease: 'linear' }}
+        >
+          {cursorCharacter}
+        </motion.span>
+      )}
+    </span>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// LandingTextAnimation
+// ---------------------------------------------------------------------------
+
 export const LandingTextAnimation: React.FC<LandingTextAnimationProps> = ({
   href,
   className = '',

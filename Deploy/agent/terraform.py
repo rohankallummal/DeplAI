@@ -20,13 +20,13 @@ class TerraformResult:
 
 
 async def run(deploy_path: str, state_key: str, phase: str = "plan") -> TerraformResult:
-    tf_dir = Path(deploy_path) / "terraform"
+    tf_dir = Path(deploy_path) / "terraform" / "code"
     tf_dir.mkdir(parents=True, exist_ok=True)
 
     if phase == "plan":
         prompt = (
             f"Read the deployment architecture at {deploy_path}/deployment.md.\n\n"
-            f"1. Generate production-ready Terraform HCL files in {deploy_path}/terraform/.\n"
+            f"1. Generate production-ready Terraform files in {deploy_path}/terraform/code/.\n"
             f"2. Run the full CLI cycle: fmt → validate → init → plan.\n"
             f"3. If any step fails, diagnose, fix, and retry (up to 3 attempts).\n"
             f"4. Stop after a successful plan. Do NOT run terraform apply.\n\n"
@@ -35,10 +35,10 @@ async def run(deploy_path: str, state_key: str, phase: str = "plan") -> Terrafor
     elif phase == "apply":
         prompt = (
             f"The Terraform plan has been approved by the user.\n\n"
-            f"1. Run: terraform apply -auto-approve {deploy_path}/terraform/terraform.plan\n"
+            f"1. Run: terraform apply -auto-approve {deploy_path}/terraform/code/terraform.plan\n"
             f"2. If apply fails, follow the Apply Failure & Partial State Process in your instructions.\n"
             f"3. After successful apply, save outputs:\n"
-            f"   terraform output -json > {deploy_path}/terraform/outputs.json\n\n"
+            f"   terraform output -json > {deploy_path}/terraform/code/outputs.json\n\n"
             f"The state key is: {state_key}\n"
         )
     else:

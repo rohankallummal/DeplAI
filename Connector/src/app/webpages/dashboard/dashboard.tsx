@@ -9,7 +9,7 @@ import { SearchIcon, FileXmarkIcon, FilterIcon } from '@/components/search-resul
 import { ArrowLeftCircle, ArrowRightCircle } from '@/components/pagination-arrows';
 import { FileFormatZip, AppConnector, CloudUploadIcon, XmarkCircleIcon } from '@/components/panel-icons';
 import ScanModal from '@/components/scan-card';
-import { GradientText } from '@/components/text-animation';
+import { GradientText, TextType } from '@/components/text-animation';
 import { usePopup } from '@/components/toast-notification';
 import Lottie from 'lottie-react';
 import deployingAnimation from '@/components/animation/deploying.json';
@@ -38,6 +38,56 @@ interface ScanResult {
 }
 
 const PROJECTS_PER_PAGE = 5;
+
+function DeployActivePanel({
+  deployId,
+  projectName,
+  onClick,
+}: {
+  deployId: string;
+  projectName: string;
+  onClick: () => void;
+}) {
+  const [showText, setShowText] = useState(false);
+
+  const handleLottieComplete = () => {
+    setShowText(true);
+  };
+
+  const handleTextCycleComplete = () => {
+    setShowText(false);
+  };
+
+  return (
+    <button
+      onClick={onClick}
+      className="w-full p-12 rounded-xl border border-blue-500 bg-gradient-to-r from-blue-50 to-blue-100 dark:from-blue-900/30 dark:to-blue-800/30 transition-all duration-200 cursor-pointer group relative overflow-hidden"
+    >
+      <div className="absolute inset-0 flex items-center justify-center">
+        {showText ? (
+          <TextType
+            texts={[`Deploying ${projectName}`]}
+            typingSpeed={75}
+            deletingSpeed={50}
+            pauseDuration={2000}
+            showCursor
+            cursorCharacter="_"
+            cursorBlinkDuration={0.5}
+            className="text-lg font-semibold text-blue-600 dark:text-blue-400"
+            onCycleComplete={handleTextCycleComplete}
+          />
+        ) : (
+          <Lottie
+            animationData={deployingAnimation}
+            loop={false}
+            onComplete={handleLottieComplete}
+            className="w-60 h-60"
+          />
+        )}
+      </div>
+    </button>
+  );
+}
 
 export default function Projects({
   user,
@@ -281,17 +331,11 @@ export default function Projects({
 
         {/* Deploy */}
         {activeDeployIds.length > 0 ? (
-          <button
-            onClick={() => {
-              const deployId = activeDeployIds[0];
-              router.push(`/webpages/deploy?project_id=${deployId}`);
-            }}
-            className="w-full p-12 rounded-xl border border-blue-500 bg-gradient-to-r from-blue-50 to-blue-100 dark:from-blue-900/30 dark:to-blue-800/30 transition-all duration-200 cursor-pointer group relative overflow-hidden"
-          >
-            <div className="absolute inset-0 flex items-center justify-center">
-              <Lottie animationData={deployingAnimation} loop className="w-60 h-60" />
-            </div>
-          </button>
+          <DeployActivePanel
+            deployId={activeDeployIds[0]}
+            projectName={activeDeployProjectNames[activeDeployIds[0]] || 'Project'}
+            onClick={() => router.push(`/webpages/deploy?project_id=${activeDeployIds[0]}`)}
+          />
         ) : (
           <button
             onClick={handleToggleDeployMode}
@@ -569,7 +613,7 @@ export default function Projects({
           {!loading && filteredProjects.length > PROJECTS_PER_PAGE && (
             <div className="p-4 border-t border-border flex items-center justify-between">
               <p className="text-sm text-muted">
-                Showing {startIndex + 1}-{Math.min(startIndex + PROJECTS_PER_PAGE, filteredProjects.length)} of {filteredProjects.length} projects
+                {startIndex + 1}-{Math.min(startIndex + PROJECTS_PER_PAGE, filteredProjects.length)} of {filteredProjects.length} projects
               </p>
               <div className="flex items-center space-x-3">
                 <button

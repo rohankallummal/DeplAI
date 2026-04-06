@@ -14,6 +14,7 @@ export function CostEstimation({ costData, onDeploy, onCancel, isLoading = false
   const totalMonthlyCost = costData.total_monthly_cost || 0;
   const totalHourlyCost = costData.total_hourly_cost || 0;
   const resources = costData.resources || [];
+  const summary = costData.summary;
 
   return (
     <div className="max-w-4xl mx-auto">
@@ -34,14 +35,14 @@ export function CostEstimation({ costData, onDeploy, onCancel, isLoading = false
       ) : (
         <>
           {/* Cost Summary */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
             <div className="bg-surface border border-border rounded-lg p-6">
               <div className="text-sm text-muted mb-1">Monthly Cost</div>
               <div className="text-3xl font-bold text-foreground">
                 ${totalMonthlyCost.toFixed(2)}
               </div>
               <div className="text-xs text-muted mt-1">
-                {(totalMonthlyCost / 30).toFixed(2)} per day
+                ${(totalMonthlyCost / 30).toFixed(2)} per day
               </div>
             </div>
 
@@ -51,34 +52,53 @@ export function CostEstimation({ costData, onDeploy, onCancel, isLoading = false
                 ${totalHourlyCost.toFixed(4)}
               </div>
               <div className="text-xs text-muted mt-1">
-                {(totalHourlyCost * 24 * 365).toFixed(2)} per year
+                ${(totalHourlyCost * 24 * 365).toFixed(2)} per year
               </div>
             </div>
           </div>
 
+          {/* Resource Summary Stats */}
+          {summary && summary.total_resources > 0 && (
+            <div className="flex flex-wrap gap-3 mb-6">
+              <span className="text-xs px-3 py-1.5 rounded-full bg-surface border border-border text-muted">
+                {summary.total_resources} resources detected
+              </span>
+              <span className="text-xs px-3 py-1.5 rounded-full bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-300">
+                {summary.estimated_resources} estimated
+              </span>
+              <span className="text-xs px-3 py-1.5 rounded-full bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 text-green-700 dark:text-green-300">
+                {summary.free_resources} free
+              </span>
+              {summary.unsupported_resources > 0 && (
+                <span className="text-xs px-3 py-1.5 rounded-full bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 text-yellow-700 dark:text-yellow-300">
+                  {summary.unsupported_resources} unsupported
+                </span>
+              )}
+            </div>
+          )}
+
           {/* Resources Breakdown */}
           {resources.length > 0 && (
             <div className="mb-8">
-              <h3 className="text-lg font-semibold text-foreground mb-4">Resource Costs (Sorted by Monthly Cost)</h3>
+              <h3 className="text-lg font-semibold text-foreground mb-4">Resource Costs</h3>
               <div className="space-y-3">
                 {resources.map((resource, idx) => (
                   <div key={idx} className="bg-surface border border-border rounded-lg p-4">
                     <div className="flex items-start justify-between mb-2">
-                      <div className="font-medium text-foreground">{resource.name}</div>
-                      <div className="text-lg font-semibold text-blue-600">
+                      <div className="font-medium text-foreground text-sm font-mono">{resource.name}</div>
+                      <div className="text-lg font-semibold text-blue-600 whitespace-nowrap ml-4">
                         ${resource.monthly_cost.toFixed(2)}/mo
                       </div>
                     </div>
 
                     {/* Components Breakdown */}
                     {resource.components && resource.components.length > 0 && (
-                      <div className="mt-3 pl-4 border-l border-border text-sm">
-                        <div className="text-muted mb-2">Components:</div>
+                      <div className="mt-3 pl-4 border-l-2 border-border text-sm">
                         <div className="space-y-1">
                           {resource.components.map((comp, compIdx) => (
                             <div key={compIdx} className="flex justify-between text-muted">
                               <span>{comp.name}</span>
-                              <span>${comp.monthly_cost.toFixed(2)}/mo</span>
+                              <span className="whitespace-nowrap ml-4">${comp.monthly_cost.toFixed(2)}/mo</span>
                             </div>
                           ))}
                         </div>

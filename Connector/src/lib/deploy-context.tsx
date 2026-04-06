@@ -41,6 +41,12 @@ export interface CostData {
       hourly_cost: number;
     }>;
   }>;
+  summary?: {
+    total_resources: number;
+    estimated_resources: number;
+    free_resources: number;
+    unsupported_resources: number;
+  };
   error?: string;
 }
 
@@ -127,13 +133,11 @@ export function DeployProvider({ children }: { children: React.ReactNode }) {
   }, [states]);
 
   const activeDeployProjectNames = useMemo(() => {
-    const names: Record<string, string> = {};
-    for (const [id, s] of Object.entries(states)) {
-      if (ACTIVE_PHASES.includes(s.phase)) {
-        names[id] = s.projectName;
-      }
-    }
-    return names;
+    return Object.fromEntries(
+      Object.entries(states)
+        .filter(([, s]) => ACTIVE_PHASES.includes(s.phase))
+        .map(([id, s]) => [id, s.projectName])
+    );
   }, [states]);
 
   function createWsMessageHandler(projectId: string) {
@@ -237,52 +241,6 @@ export function DeployProvider({ children }: { children: React.ReactNode }) {
         projectName,
       },
     }));
-
-    try {
-      const historyRes = await fetch(`/api/deploy/chat-history?project_id=${projectId}`);
-      if (historyRes.ok) {
-        const historyData = await historyRes.json();
-        if (historyData.data) {
-          const saved = historyData.data;
-          const chatMessages: ChatMessage[] = [];
-          const answeredQuestions: Record<string, string> = {};
-
-          if (saved.questions && saved.answers) {
-            for (const q of saved.questions) {
-              chatMessages.push({
-                role: 'agent',
-                content: q.question,
-                questionId: q.id,
-                timestamp: new Date().toISOString(),
-              });
-              const answer = saved.answers.find((a: any) => a.id === q.id);
-              if (answer) {
-                chatMessages.push({
-                  role: 'user',
-                  content: answer.answer,
-                  questionId: q.id,
-                  timestamp: new Date().toISOString(),
-                });
-                answeredQuestions[q.id] = answer.answer;
-              }
-            }
-          }
-
-          if (chatMessages.length > 0) {
-            setStates(prev => ({
-              ...prev,
-              [projectId]: {
-                ...prev[projectId],
-                chatMessages,
-                answeredQuestions,
-                questions: saved.questions || [],
-                currentQuestionIndex: saved.questions?.length || 0,
-              },
-            }));
-          }
-        }
-      }
-    } catch {}
 
     await connectDeployWsWithToken(projectId);
   }, []);

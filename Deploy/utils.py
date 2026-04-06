@@ -140,7 +140,7 @@ def run_terraform_command(tf_command: list[str], aws_env: dict, tf_log: str | No
         cmd = ["terraform"] + tf_command
         exit_code, output = container.exec_run(
             cmd,
-            workdir="/workspace/deploy/terraform",
+            workdir="/workspace/deploy/terraform/code",
             environment=env,
             user="agent",
         )

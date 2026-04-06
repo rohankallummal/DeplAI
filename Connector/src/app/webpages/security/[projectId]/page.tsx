@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useRouter, useParams } from 'next/navigation';
-import { ExitIcon } from '@/components/log-in-out';
 import { usePageLoading } from '@/lib/page-loading-context';
 import ThemeToggle from '@/components/theme-toggle';
 import RemediationRequest from '@/components/remediation-request';
@@ -17,7 +16,7 @@ export default function SecurityAnalysisPage() {
   const params = useParams();
   const projectId = params.projectId as string;
 
-  const { resetAll, getScanState, startRemediation, getRemediationState, getRemediationResult, isAnyRemediating, restoreState } = useScan();
+  const { getScanState, startRemediation, getRemediationState, getRemediationResult, isAnyRemediating, restoreState } = useScan();
   const { state: scanState, projectName: scanProjectName } = getScanState(projectId);
   const { state: remediationState } = getRemediationState(projectId);
   const remediationResult = getRemediationResult(projectId);
@@ -27,13 +26,14 @@ export default function SecurityAnalysisPage() {
   const [loading, setLoading] = useState(true);
   const [activePopup, setActivePopup] = useState<'clean' | 'remediated' | 'failed' | 'published' | null>(null);
   const [findingsReady, setFindingsReady] = useState(false);
+  const [findingsLoaded, setFindingsLoaded] = useState(false);
   const [publishedUrl, setPublishedUrl] = useState<string | null>(null);
   const [createdFromLocal, setCreatedFromLocal] = useState(false);
 
   const remediating = remediationState === 'running';
   const remediationDone = remediationState === 'completed';
 
-  usePageLoading(loading);
+  usePageLoading(loading || !findingsLoaded);
 
   useEffect(() => {
     async function init() {
@@ -95,17 +95,6 @@ export default function SecurityAnalysisPage() {
     } catch (error) {
       console.error('Failed to fetch project:', error);
     }
-  }
-
-  async function handleLogout() {
-    resetAll();
-    localStorage.removeItem('theme');
-    localStorage.removeItem('deplai_created_repos');
-    Object.keys(localStorage)
-      .filter(k => k.startsWith('deplai_published_') || k.startsWith('deplai_remediated_'))
-      .forEach(k => localStorage.removeItem(k));
-    await fetch('/api/auth/logout', { method: 'POST' });
-    router.push('/');
   }
 
   const handleFindingsReady = setFindingsReady;
@@ -208,13 +197,6 @@ export default function SecurityAnalysisPage() {
 
             <div className="flex items-center space-x-2">
               <ThemeToggle />
-              <button
-                onClick={handleLogout}
-                className="p-2 text-muted hover:text-foreground rounded-lg transition"
-                title="Logout"
-              >
-                <ExitIcon />
-              </button>
             </div>
           </div>
         </div>
@@ -223,7 +205,7 @@ export default function SecurityAnalysisPage() {
       <div className="flex-1 flex flex-col min-h-0 relative">
         <div className={`flex-1 min-h-0 flex flex-col container mx-auto px-6 py-4 transition-all duration-200 ${popupActive && !monitorOpen ? 'blur-md pointer-events-none select-none' : ''}`}>
           <div className="flex-1 min-h-0">
-            <Findings projectId={projectId} remediating={remediating} remediationDone={remediationDone} onCleanScan={handleCleanScan} onFindingsReady={handleFindingsReady} />
+            <Findings projectId={projectId} remediating={remediating} remediationDone={remediationDone} onCleanScan={handleCleanScan} onFindingsReady={handleFindingsReady} onLoaded={() => setFindingsLoaded(true)} />
           </div>
         </div>
 
