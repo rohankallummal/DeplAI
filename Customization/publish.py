@@ -1,0 +1,161 @@
+import logging
+import os
+
+import requests
+
+from utils import get_docker_client, decode_output, CUSTOMIZE_CODE_VOLUME
+
+logger = logging.getLogger(__name__)
+
+PR_BODY = """## DeplAI Frontend Customization
+
+This pull request contains UI changes applied by DeplAI's customization agent.
+"""
+
+
+def github_headers(token: str) -> dict[str, str]:
+    return {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+
+def get_github_user_identity(token: str, owner: str) -> tuple[str, str]:
+    try:
+        resp = requests.get(
+            f"https://api.github.com/users/{owner}",
+            headers=github_headers(token),
+            timeout=15,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            name = data.get("name") or data.get("login") or owner
+            email = data.get("email") or f"{owner}@users.noreply.github.com"
+            return (name, email)
+    except Exception as e:
+        logger.warning("Failed to fetch GitHub user info for %s: %s", owner, e)
+    return (owner, f"{owner}@users.noreply.github.com")
+
+
+def save_local_changes(project_id: str, user_id: str) -> tuple[bool, str]:
+    """Copy updated codebase from Docker volume back to host."""
+    host_base = os.environ.get("HOST_PROJECTS_DIR")
+    if host_base:
+        check_path = os.path.join("/local-projects", user_id, project_id)
+        host_path = os.path.join(host_base, user_id, project_id)
+    else:
+        host_path = os.path.abspath(
+            os.path.join(
+                os.path.dirname(__file__), "..", "Connector", "tmp",
+                "local-projects", user_id, project_id,
+            )
+        )
+        check_path = host_path
+
+    try:
+        output = get_docker_client().containers.run(
+            "alpine",
+            command=["sh", "-c", "rm -rf /dst/* /dst/.[!.]* /dst/..?* 2>/dev/null; cp -a /src/. /dst/ && echo Success || echo Failed"],
+            volumes={
+                CUSTOMIZE_CODE_VOLUME: {"bind": "/src", "mode": "ro"},
+                host_path: {"bind": "/dst", "mode": "rw"},
+            },
+            remove=True,
+        )
+        decoded = decode_output(output)
+        if "Success" in decoded:
+            logger.info("Local changes saved for project %s", project_id)
+            return (True, "Changes saved successfully")
+        return (False, f"Copy failed: {decoded}")
+    except Exception as e:
+        logger.error("Failed to save local changes: %s", e)
+        return (False, str(e))
+
+
+def create_customize_pr(
+    project_id: str,
+    token: str,
+    owner: str,
+    repo: str,
+    default_branch: str = "main",
+) -> tuple[bool, str, str | None]:
+    """Create a PR with customization changes."""
+    branch_name = f"deplai/customize-{project_id}"
+    clone_url = f"https://x-access-token:{token}@github.com/{owner}/{repo}.git"
+
+    user_name, user_email = get_github_user_identity(token, owner)
+
+    script = " && ".join([
+        "git config --global --add safe.directory /repo",
+        "cd /repo",
+        f'git config user.email "{user_email}"',
+        f'git config user.name "{user_name}"',
+        f"git branch -D {branch_name} 2>/dev/null || true",
+        f"git checkout -b {branch_name}",
+        "git add .",
+        'git diff --cached --quiet && echo "NO_CHANGES" && exit 0 || true',
+        'git commit -m "feat: UI customization applied by DeplAI"',
+        f"git remote set-url origin {clone_url}",
+        f"git push --force origin {branch_name}",
+    ])
+
+    client = get_docker_client()
+    try:
+        container = client.containers.run(
+            "alpine/git",
+            entrypoint="sh",
+            command=["-c", script],
+            volumes={CUSTOMIZE_CODE_VOLUME: {"bind": "/repo", "mode": "rw"}},
+            detach=True,
+        )
+        result = container.wait(timeout=120)
+        logs = decode_output(container.logs())
+        container.remove()
+
+        if "NO_CHANGES" in logs:
+            return (False, "No changes to commit", None)
+
+        if result.get("StatusCode", -1) != 0:
+            logger.error("Git push failed: %s", logs)
+            return (False, f"Failed to push branch: {logs}", None)
+    except Exception as e:
+        logger.error("Docker error during push: %s", e)
+        return (False, f"Failed to push branch: {e}", None)
+
+    logger.info("Pushed branch %s to %s/%s", branch_name, owner, repo)
+    headers = github_headers(token)
+
+    resp = requests.post(
+        f"https://api.github.com/repos/{owner}/{repo}/pulls",
+        headers=headers,
+        json={
+            "title": "feat: DeplAI UI customization",
+            "body": PR_BODY,
+            "head": branch_name,
+            "base": default_branch,
+        },
+        timeout=30,
+    )
+
+    repo_url = f"https://github.com/{owner}/{repo}"
+
+    if resp.status_code == 201:
+        pr_url = resp.json()["html_url"]
+        logger.info("Created PR: %s", pr_url)
+        return (True, "Pull request created successfully", pr_url)
+
+    if resp.status_code == 422:
+        existing = requests.get(
+            f"https://api.github.com/repos/{owner}/{repo}/pulls",
+            headers=headers,
+            params={"head": f"{owner}:{branch_name}", "state": "open"},
+            timeout=15,
+        )
+        if existing.ok and existing.json():
+            pr_url = existing.json()[0]["html_url"]
+            logger.info("PR already exists: %s", pr_url)
+            return (True, "Pull request already exists", pr_url)
+
+    logger.warning("PR API failed (status %d), but branch was pushed", resp.status_code)
+    return (True, "Branch pushed successfully", repo_url)

@@ -2,6 +2,7 @@
 
 import { ScanProvider } from '@/lib/scan-context';
 import { DeployProvider } from '@/lib/deploy-context';
+import { CustomizeProvider } from '@/lib/customize-context';
 import { PopupProvider } from '@/components/toast-notification';
 import { PageLoadingProvider, usePageLoadingContext } from '@/lib/page-loading-context';
 import { LoadingScreen } from '@/components/loading-spinner';
@@ -24,9 +25,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     <PopupProvider>
       <ScanProvider>
         <DeployProvider>
-          <PageLoadingProvider>
-            <LayoutContent>{children}</LayoutContent>
-          </PageLoadingProvider>
+          <CustomizeProvider>
+            <PageLoadingProvider>
+              <LayoutContent>{children}</LayoutContent>
+            </PageLoadingProvider>
+          </CustomizeProvider>
         </DeployProvider>
       </ScanProvider>
     </PopupProvider>

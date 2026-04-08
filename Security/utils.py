@@ -8,7 +8,7 @@ _docker_client: docker.DockerClient | None = None
 SEVERITY_LEVELS = ["critical", "high", "medium", "low"]
 SCANNER_SUFFIXES = ["Bearer.json", "sbom.json", "Grype.json"]
 
-CODEBASE_VOLUME = "Codebase"
+CODEBASE_VOLUME = "securityCode"
 SECURITY_REPORTS_VOLUME = "Reports"
 AGENT_ARTIFACTS_VOLUME = "Artifact"
 

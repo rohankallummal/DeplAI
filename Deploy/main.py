@@ -53,7 +53,7 @@ active_deploys: dict[str, DeployRunner] = {}
 
 _last_project_id: str | None = None
 
-ACTIVE_STATUSES = frozenset({"running", "analyzing", "clarifying", "architecting", "terraforming", "costing"})
+ACTIVE_STATUSES = frozenset({"running", "analyzing", "clarifying", "terraforming", "costing"})
 
 
 @app.post("/api/deploy/validate", response_model=DeployValidationResponse, dependencies=[Depends(verify_api_key)])
@@ -131,6 +131,9 @@ async def websocket_deploy(websocket: WebSocket, project_id: str):
                         success = await runner.run()
                         if success:
                             await runner._send_status(StreamStatus.completed)
+                        elif runner._user_cancelled:
+                            await runner._send_status(StreamStatus.cancelled)
+                            deploy_contexts.pop(project_id, None)
                     except WebSocketDisconnect:
                         pass
                     except Exception as e:

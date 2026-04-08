@@ -12,7 +12,7 @@ SYSTEM_PROMPT = (PROMPT_DIR / "analyzer.md").read_text(encoding="utf-8")
 async def run(codebase_path: str, deploy_path: str) -> bool:
     prompt = (
         f"Analyze the repository at {codebase_path} and write a comprehensive "
-        f"context.md document to {deploy_path}/context.md. "
+        f"project-profile.md document to {deploy_path}/project-profile.md. "
     )
 
     options = ClaudeAgentOptions(

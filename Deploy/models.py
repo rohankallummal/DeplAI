@@ -27,10 +27,10 @@ class StreamStatus(str, Enum):
     running = "running"
     analyzing = "analyzing"
     clarifying = "clarifying"
-    architecting = "architecting"
     terraforming = "terraforming"
     costing = "costing"
     completed = "completed"
+    cancelled = "cancelled"
     error = "error"
 
 

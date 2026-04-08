@@ -4,7 +4,7 @@ import { createContext, useContext, useState, useRef, useCallback, useMemo } fro
 
 const WS_BASE_URL = process.env.NEXT_PUBLIC_DEPLOY_WS_URL || 'ws://localhost:8001';
 
-export type DeployPhase = 'idle' | 'analyzing' | 'clarifying' | 'architecting' | 'terraforming' | 'costing' | 'completed' | 'error';
+export type DeployPhase = 'idle' | 'analyzing' | 'clarifying' | 'terraforming' | 'costing' | 'completed' | 'cancelled' | 'error';
 
 export interface DeployMessage {
   index: number;
@@ -47,6 +47,7 @@ export interface CostData {
     free_resources: number;
     unsupported_resources: number;
   };
+  table?: string;
   error?: string;
 }
 
@@ -109,14 +110,14 @@ const STATUS_MAP: Record<string, DeployPhase> = {
   running: 'analyzing',
   analyzing: 'analyzing',
   clarifying: 'clarifying',
-  architecting: 'architecting',
   terraforming: 'terraforming',
   costing: 'costing',
   completed: 'completed',
+  cancelled: 'cancelled',
   error: 'error',
 };
 
-const ACTIVE_PHASES: DeployPhase[] = ['analyzing', 'clarifying', 'architecting', 'terraforming', 'costing'];
+const ACTIVE_PHASES: DeployPhase[] = ['analyzing', 'clarifying', 'terraforming', 'costing'];
 
 export function DeployProvider({ children }: { children: React.ReactNode }) {
   const [states, setStates] = useState<Record<string, ProjectDeployState>>({});

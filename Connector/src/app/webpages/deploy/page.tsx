@@ -10,9 +10,9 @@ import { CostEstimation } from '@/components/cost-estimation';
 import { PostDeploymentDashboard } from '@/components/post-deployment-dashboard';
 import { useDeploy, type CostData } from '@/lib/deploy-context';
 import DeployQACard from '@/components/deploy-qa-card';
-import loading3dAnimation from '@/components/animation/loading-3d.json';
+import loading3d1Animation from '@/components/animation/loading-3d-1.json';
 import loading3d2Animation from '@/components/animation/loading-3d-2.json';
-import loading3d3Animation from '@/components/animation/loading-3d-3.json';
+import costAnimation from '@/components/animation/cost.json';
 import tickAnimation from '@/components/animation/tick.json';
 
 export default function DeployPage() {
@@ -43,6 +43,7 @@ function DeployPageContent() {
     sendAnswer,
     submitAllAnswers,
     confirmDeploy,
+    resetDeploy,
   } = useDeploy();
 
   const deployState = projectId ? getDeployState(projectId) : null;
@@ -54,6 +55,13 @@ function DeployPageContent() {
   useEffect(() => {
     checkAuth();
   }, []);
+
+  useEffect(() => {
+    if (phase === 'cancelled' && projectId) {
+      resetDeploy(projectId);
+      router.push('/');
+    }
+  }, [phase]);
 
   useEffect(() => {
     if (!loading && projectId && projectInfo && !hasStarted.current) {
@@ -155,7 +163,7 @@ function DeployPageContent() {
 
       <div className="container mx-auto px-6 py-8">
         {phase === 'analyzing' && (
-          <PhaseLoadingState title="Analyzing Repository" messages={deployState?.messages || []} animationData={loading3d3Animation} />
+          <PhaseLoadingState title="Analyzing Repository" messages={deployState?.messages || []} animationData={loading3d1Animation} />
         )}
 
         {phase === 'clarifying' && projectId && deployState && (
@@ -168,21 +176,16 @@ function DeployPageContent() {
           />
         )}
 
-        {phase === 'architecting' && (
-          <PhaseLoadingState
-            title="Architecting Deployment"
-            subtitle="Mapping components to AWS services and generating deployment profile..."
-            messages={deployState?.messages || []}
-          />
-        )}
-
         {phase === 'terraforming' && (
           <PhaseLoadingState
             title="Provisioning Infrastructure"
-            subtitle="Applying Terraform configuration to AWS and provisioning resources..."
             messages={deployState?.messages || []}
             animationData={loading3d2Animation}
           />
+        )}
+
+        {phase === 'costing' && !deployState?.costData && (
+          <PhaseLoadingState title="Estimating Cost" messages={[]} animationData={costAnimation} animationClassName="w-60 h-60" />
         )}
 
         {phase === 'costing' && deployState?.costData && projectId && (
@@ -219,19 +222,21 @@ function PhaseLoadingState({
   title,
   subtitle,
   messages,
-  animationData = loading3dAnimation,
+  animationData = loading3d1Animation,
+  animationClassName = "w-48 h-48",
 }: {
   title: string;
   subtitle?: string;
   messages: { type: string; content: string }[];
   animationData?: unknown;
+  animationClassName?: string;
 }) {
   return (
     <div className="flex flex-col items-center justify-center min-h-[60vh]">
       <Lottie
         animationData={animationData}
         loop
-        className="w-48 h-48"
+        className={animationClassName}
       />
       <p className="text-xl font-semibold mt-4 text-foreground">{title}</p>
       {subtitle && <p className="text-muted text-sm mt-2">{subtitle}</p>}

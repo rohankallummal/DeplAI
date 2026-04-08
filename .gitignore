@@ -3,6 +3,7 @@
 Security/.env
 Deploy/.env
 Connector/.env.local
+Customization/.env
 
 Connector/node_modules
 Connector/.pnp
@@ -44,6 +45,7 @@ __pycache__/
 *.pyo
 Security/**/__init__.py
 Deploy/**/__init__.py
+Customization/**/__init__.py
 
 Connector/.vercel
 

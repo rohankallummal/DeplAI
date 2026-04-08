@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, useEffect, useState } from 'react';
+import { Suspense, useEffect, useRef, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import LoadingSpinner, { LoadingScreen } from '@/components/loading-spinner';
@@ -11,6 +11,7 @@ import ChatInterface from './chat-interface';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { usePopup } from '@/components/toast-notification';
+import { useCustomize } from '@/lib/customize-context';
 
 interface FileItem {
   name: string;
@@ -55,6 +56,7 @@ function RepositoryBrowserContent() {
   const currentPath = searchParams.get('path') || '';
 
   const { showPopup } = usePopup();
+  const { startCustomize, getCustomizeState, saveChanges, discardChanges, resetCustomize } = useCustomize();
   const [authLoading, setAuthLoading] = useState(true);
   const [pageReady, setPageReady] = useState(false);
   const [projectName, setProjectName] = useState('');
@@ -66,14 +68,86 @@ function RepositoryBrowserContent() {
   const [error, setError] = useState<string | null>(null);
   const [isSuspended, setIsSuspended] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
+  const chatBlockingRef = useRef(false);
   const [username, setUsername] = useState('');
   const [branches, setBranches] = useState<string[]>([]);
   const [currentBranch, setCurrentBranch] = useState<string>(branchParam);
   const [defaultBranch, setDefaultBranch] = useState<string>('');
   const [branchDropdownOpen, setBranchDropdownOpen] = useState(false);
   const [branchSearch, setBranchSearch] = useState('');
+  const [exitPopupStep, setExitPopupStep] = useState<null | 'confirm_exit' | 'confirm_save'>(null);
 
   usePageLoading(authLoading || !pageReady);
+
+  // Block browser back/forward only while chat is open
+  useEffect(() => {
+    const handlePopstate = () => {
+      if (chatBlockingRef.current) {
+        window.history.pushState(null, '', window.location.href);
+      }
+    };
+
+    window.addEventListener('popstate', handlePopstate);
+    return () => window.removeEventListener('popstate', handlePopstate);
+  }, []);
+
+  async function handleOpenChat() {
+    chatBlockingRef.current = true;
+    window.history.pushState(null, '', window.location.href);
+    setChatOpen(true);
+
+    // Validate and start customization session
+    try {
+      const body: Record<string, any> = {
+        project_id: projectId,
+        project_name: projectName || repo || 'Project',
+        project_type: projectType,
+      };
+      if (!isLocal) {
+        body.owner = owner;
+        body.repo = repo;
+        body.default_branch = currentBranch || defaultBranch || 'main';
+      }
+
+      await fetch('/api/customize/validate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+
+      await startCustomize(projectId, projectName || repo || 'Project', projectType);
+    } catch (err) {
+      console.error('Failed to start customization:', err);
+    }
+  }
+
+  function handleExitChat() {
+    const customizeState = getCustomizeState(projectId);
+    if (customizeState.changesMade) {
+      setExitPopupStep('confirm_exit');
+      return;
+    }
+    doExitChat();
+  }
+
+  function doExitChat() {
+    resetCustomize(projectId);
+    chatBlockingRef.current = false;
+    setChatOpen(false);
+    setExitPopupStep(null);
+    window.history.back();
+    if (isLocal) fetchContents();
+  }
+
+  function handleExitSave() {
+    saveChanges(projectId);
+    doExitChat();
+  }
+
+  function handleExitDiscard() {
+    discardChanges(projectId);
+    doExitChat();
+  }
 
   useEffect(() => {
     checkAuth();
@@ -299,7 +373,7 @@ function RepositoryBrowserContent() {
 
             <div className="flex items-center space-x-3">
               <button
-                onClick={() => setChatOpen(prev => !prev)}
+                onClick={() => chatOpen ? handleExitChat() : handleOpenChat()}
                 className={`p-2 rounded-lg transition ${
                   chatOpen
                     ? 'bg-[#fffafa] dark:bg-surface-hover text-foreground'
@@ -418,9 +492,7 @@ function RepositoryBrowserContent() {
       </header>
 
       {chatOpen ? (
-        <div className="container mx-auto px-6 flex flex-col" style={{ height: 'calc(100vh - 5rem)' }}>
-          <ChatInterface username={username} />
-        </div>
+        <ChatInterface username={username} onExit={handleExitChat} projectId={projectId} />
       ) : (
       <>
       <div className="container mx-auto px-6 py-8">
@@ -582,6 +654,58 @@ function RepositoryBrowserContent() {
         </div>
       </div>
       </>
+      )}
+
+      {/* Exit confirmation popup */}
+      {exitPopupStep && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
+          <div className="relative bg-surface rounded-xl shadow-2xl max-w-sm mx-4 px-8 py-8">
+            {exitPopupStep === 'confirm_exit' ? (
+              <>
+                <h3 className="text-lg font-semibold text-foreground mb-2">Exit chat?</h3>
+                <p className="text-sm text-muted mb-6">You have unsaved changes. Are you sure you want to exit?</p>
+                <div className="flex gap-3 justify-end">
+                  <button
+                    onClick={() => setExitPopupStep(null)}
+                    className="px-4 py-2 text-sm rounded-lg border border-border text-foreground hover:bg-surface-hover transition"
+                  >
+                    Stay
+                  </button>
+                  <button
+                    onClick={() => setExitPopupStep('confirm_save')}
+                    className="px-4 py-2 text-sm rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition"
+                  >
+                    Yes, exit
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <h3 className="text-lg font-semibold text-foreground mb-2">Save changes?</h3>
+                <p className="text-sm text-muted mb-6">
+                  {isLocal
+                    ? 'Your changes will be saved to the project files.'
+                    : 'A pull request will be created with your changes.'}
+                </p>
+                <div className="flex gap-3 justify-end">
+                  <button
+                    onClick={handleExitDiscard}
+                    className="px-4 py-2 text-sm rounded-lg border border-border text-foreground hover:bg-surface-hover transition"
+                  >
+                    Discard
+                  </button>
+                  <button
+                    onClick={handleExitSave}
+                    className="px-4 py-2 text-sm rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition"
+                  >
+                    Save
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
       )}
     </div>
   );

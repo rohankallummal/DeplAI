@@ -11,14 +11,14 @@ SYSTEM_PROMPT = (PROMPT_DIR / "clarify.md").read_text(encoding="utf-8")
 
 async def run(deploy_path: str) -> bool:
     prompt = (
-        f"Read the context file at {deploy_path}/context.md. "
+        f"Read the context file at {deploy_path}/project-profile.md. "
         f"Based on the repository analysis, generate targeted clarification questions "
         f"and write them as JSON to {deploy_path}/questions.json. "
     )
 
     options = ClaudeAgentOptions(
         model="opus",
-        allowed_tools=["Read", "Write", "Bash", "WebSearch", "WebFetch"],
+        allowed_tools=["Read", "Write", "Edit", "Bash"],
         permission_mode="bypassPermissions",
         cwd=deploy_path,
         max_turns=30,

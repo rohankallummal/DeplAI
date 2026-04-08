@@ -3,6 +3,7 @@ import { requireAuth, verifyLocalProjectAccess } from '@/lib/auth';
 import { query } from '@/lib/db';
 import { deleteProject } from '@/lib/local-projects';
 import { SECURITY_URL, securityHeaders } from '@/lib/security';
+import { CUSTOMIZE_URL, customizeHeaders } from '@/lib/customize';
 
 export async function DELETE(
   request: NextRequest,
@@ -39,6 +40,23 @@ export async function DELETE(
       }
     } catch (cleanupError) {
       console.error('Scan report cleanup failed (non-fatal):', cleanupError);
+    }
+
+    try {
+      const customizeStatus = await fetch(`${CUSTOMIZE_URL}/api/customize/status/${projectId}`, {
+        headers: customizeHeaders(),
+      });
+      if (customizeStatus.ok) {
+        const statusData = await customizeStatus.json();
+        if (statusData.active) {
+          await fetch(`${CUSTOMIZE_URL}/api/cleanup`, {
+            method: 'POST',
+            headers: customizeHeaders(),
+          });
+        }
+      }
+    } catch (cleanupError) {
+      console.error('Customization cleanup failed (non-fatal):', cleanupError);
     }
 
     return NextResponse.json({

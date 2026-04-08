@@ -18,7 +18,7 @@ from infracost import estimate_cost, cost_estimate_to_dict, get_cost_table
 
 logger = logging.getLogger(__name__)
 
-TOTAL_STEPS = 12
+TOTAL_STEPS = 10
 
 
 class DeployRunner(RunnerBase):
@@ -32,6 +32,7 @@ class DeployRunner(RunnerBase):
         self._answers_data: dict | None = None
         self._deploy_confirmed_event = asyncio.Event()
         self._deploy_confirmed = False
+        self._user_cancelled = False
 
     def cancel(self):
         super().cancel()
@@ -128,35 +129,15 @@ class DeployRunner(RunnerBase):
         if self._answers_data is None:
             return await self._terminate("No answers received")
 
-        questions = {q["id"]: q for q in self._answers_data.get("questions", [])}
-        answers_with_context = []
-        for answer in self._answers_data.get("answers", []):
-            answer_obj = answer.copy()
-            if answer["id"] in questions:
-                answer_obj["context"] = questions[answer["id"]].get("context", "")
-            answers_with_context.append(answer_obj)
-
-        answers_only = {"answers": answers_with_context}
-        answers_json = json.dumps(answers_only, indent=2)
+        answers_json = json.dumps(self._answers_data.get("answers", []), indent=2)
         await asyncio.to_thread(
             self._container.exec_run,
-            ["sh", "-c", f"cat > /workspace/deploy/answers.json << 'ANSWERS_EOF'\n{answers_json}\nANSWERS_EOF"],
+            ["sh", "-c", f"cat > /workspace/deploy/QnA.json << 'ANSWERS_EOF'\n{answers_json}\nANSWERS_EOF"],
             user="agent",
             environment={"HOME": "/home/agent"},
         )
 
-        # Phase 3: Architecture Synthesis (Agent 2 - Phase 2)
-        await self._send_status(StreamStatus.architecting)
-        logger.info("Generating deployment architecture")
-
-        synth_result = await self._run_agent_phase("synthesize")
-        if not synth_result or not synth_result.get("success"):
-            return await self._terminate("Architecture synthesis failed")
-
-        logger.info("Deployment architecture generated successfully")
-        self._check_cancelled()
-
-        # Phase 4: Terraform — Generate + Plan
+        # Phase 3: Terraform — Generate + Plan
         await self._send_status(StreamStatus.terraforming)
         logger.info("Starting Terraform generation and planning")
 
@@ -201,10 +182,12 @@ class DeployRunner(RunnerBase):
         self._check_cancelled()
 
         if not self._deploy_confirmed:
-            logger.info("User cancelled deployment")
+            logger.info("User cancelled deployment — cleaning up volumes")
+            self._user_cancelled = True
+            await asyncio.to_thread(self._clear_volumes)
             return False
 
-        # Phase 5: Terraform Apply
+        # Phase 4: Terraform Apply
         logger.info("User confirmed, starting Terraform apply")
 
         apply_result = await self._run_agent_phase(
@@ -225,7 +208,7 @@ class DeployRunner(RunnerBase):
         try:
             exit_code, output = await asyncio.to_thread(
                 self._container.exec_run,
-                ["sh", "-c", "curl -s --max-time 5 -o /dev/null http://terraform-mcp:8080/mcp && echo ok || echo fail"],
+                ["sh", "-c", "curl -s --max-time 5 --connect-timeout 3 -o /dev/null -X POST http://terraform-mcp:8080/mcp && echo ok || echo fail"],
                 user="agent",
             )
             text = decode_output(output).strip()
@@ -314,6 +297,21 @@ class DeployRunner(RunnerBase):
                     logger.info(f"[{msg_type.upper()}] {msg_content}")
 
         return result
+
+    def _clear_volumes(self):
+        """Clear contents of both codebase and deploy volumes."""
+        try:
+            self._container.exec_run(
+                [
+                    "sh", "-c",
+                    "rm -rf /workspace/codebase/* /workspace/codebase/.[!.]* /workspace/codebase/..?* "
+                    "/workspace/deploy/* /workspace/deploy/.[!.]* /workspace/deploy/..?* 2>/dev/null || true"
+                ],
+                user="agent",
+            )
+            logger.info("Volumes cleared")
+        except Exception as e:
+            logger.error("Failed to clear volumes: %s", e)
 
     def _setup_terraform_directories(self):
         """Create terraform directories in the deploy volume."""

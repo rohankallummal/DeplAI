@@ -1,47 +1,71 @@
 # TASK
 
-You are responsible for uncovering the key business and technical drivers—especially those not explicitly stated, that will guide the design of the AWS infrastructure.
+You are responsible for uncovering the key business and technical drivers—especially those not explicitly stated—that will guide the design of the AWS infrastructure. Your questions are directed at **developers who built the application**.
 
 ## Your Objective
 
-Read the `context.md` file. Based on the information gathered, generate a set of **targeted clarification questions** that you need the user to answer.
-
-## **VERY IMPORTANT**: Research First, Generate Second
-
-Before generating questions, use web search tools to verify your understanding of **current** AWS service & resources. You MUST restrict your research to:
-- `https://docs.aws.amazon.com`
-- `https://github.com/awsdocs`
-
-This ensures your questions and implied options reflect **up-to-date** AWS capabilities.
-
+Read the `project-profile.md` file. Based on the information gathered, generate a set of **targeted clarification questions** that resolve ambiguities critical to infrastructure decisions.
 
 ## Guidelines for Questions
 
-Generate questions that resolve ambiguity critical to AWS architecture decisions.
+### Service-Agnostic by Default
 
-Common areas include (but are NOT limited to):
+Questions must focus on **understanding requirements**, not selecting AWS services. Ask about what the application needs — not which AWS product to use.
+
+- **Bad:** "Would you like to use RDS or DynamoDB?"
+- **Good:** "What are your database access patterns — primarily relational queries, key-value lookups, or a mix?"
+
+**Exception:** Only If `project-profile.md` explicitly mentions multiple viable AWS services/resources for the same concern, you may present those options to help the user choose. Do this sparingly, with clear context explaining why each option fits, so you don't overwhelm the user.
+
+### Do Not Ask About Pricing
+
+Cost and pricing questions are not relevant at this stage. Focus on identifying what makes the application **resilient, scalable, and efficient**.
+
+### Question Flow
+
+Begin with **broad, high-impact questions** that surface multiple architectural needs. Then move to more specific or clarifying questions as needed. This gives the user a natural top-down experience rather than jumping between unrelated details.
+
+### Common Areas
+
+These are starting points, not boundaries:
 
 - Scale & traffic expectations
-- Availability and SLA requirements
-- Data compliance and residency (HIPAA, SOC2, PCI-DSS, etc.)
-- Deployment strategy preferences
-- Domain, networking, and CDN needs
-- Authentication and authorization
-- Monitoring and alerting
+- Availability & SLA requirements
+- Data compliance & residency
+- Deployment strategy
+- Environment strategy
+- Domain, DNS & CDN
+- Networking & isolation
+- Compute model preferences
+- Statelessness & session management
+- Data persistence & backups
+- Disaster recovery
+- Authentication & authorization
+- Background processing & scheduling
+- File storage & media handling
+- Monitoring, logging & alerting
 - CI/CD pipeline preferences
-- Environment strategy (dev, staging, prod)
 
-These are starting points, not boundaries. If `context.md` reveals concerns outside these areas that would fundamentally affect the architecture — 
-**You must ask about those too.**
+If `project-profile.md` reveals concerns outside these areas that would fundamentally affect the architecture — **you must ask about those too.**
+
+### Self-Review Before Output
+
+After generating your questions, review the full list and verify:
+1. **No contradictions** — no question invalidates or conflicts with another
+2. **No redundancy** — no two questions ask for the same information in different ways
+3. **No ambiguity** — each question is clear about what it's asking and why
+4. **Logical progression** — later questions build on earlier context without overriding previous user choices
+5. **Service leakage** — accidentally asking the user to pick an AWS service when questions should be asking about the requirement instead?
+
+If you find issues during review, fix them before writing the output.
 
 !!!
 Rules
 
-- Only ask questions where the answer genuinely affects the Infrastructure decision
-- Do not ask questions whose answers are already clear from context.md
+- Only ask questions where the answer genuinely affects an infrastructure decision
+- Do not ask questions whose answers are already clear from project-profile.md
 - Keep questions concise and specific — avoid open-ended questions
-- Ask as few questions as possible, but as many as necessary — never sacrifice coverage for brevity
-- To prevent an endless cycle of questions **MAX CAP IS AT 20**.
+- **MAX CAP IS 25 questions**
 - Each question should include suggested options where applicable (2-4 options)
 - `allowCustom: true`: The user can provide their own answer if none of the suggestions fit
 !!!
@@ -58,11 +82,8 @@ Write the questions as a JSON file to the specified output path. The format must
       "category": "",
       "question": "",
       "options": ["", "", "", ""],
-      "allowCustom": true,
-      "context": ""
+      "allowCustom": true
     }
   ]
 }
 ```
-
-

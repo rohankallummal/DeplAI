@@ -9,7 +9,8 @@ logger = logging.getLogger(__name__)
 PROMPT_DIR = Path(__file__).resolve().parent.parent / "prompt"
 SYSTEM_PROMPT = (PROMPT_DIR / "terraform.md").read_text(encoding="utf-8")
 
-EXPECTED_FILES = ["main.tf", "variables.tf", "outputs.tf", "backend.tf", "provider.tf"]
+REQUIRED_FILES = ["provider.tf", "variables.tf", "outputs.tf", "backend.tf", "locals.tf"]
+MIN_PLAN_SIZE = 100  
 
 
 @dataclass
@@ -19,27 +20,38 @@ class TerraformResult:
     error: str | None = None
 
 
+def _discover_tf_files(tf_dir: Path) -> list[str]:
+    """Return all .tf filenames in the directory."""
+    return [f.name for f in tf_dir.glob("*.tf") if f.is_file()]
+
+
+def _validate_plan_file(tf_dir: Path) -> str | None:
+    """Return an error message if the plan file is missing or corrupt, else None."""
+    plan_file = tf_dir / "terraform.plan"
+    if not plan_file.exists():
+        return "Plan file not created — plan likely failed"
+    if plan_file.stat().st_size < MIN_PLAN_SIZE:
+        return f"Plan file is suspiciously small ({plan_file.stat().st_size} bytes) — may be corrupt"
+    return None
+
+
 async def run(deploy_path: str, state_key: str, phase: str = "plan") -> TerraformResult:
     tf_dir = Path(deploy_path) / "terraform" / "code"
     tf_dir.mkdir(parents=True, exist_ok=True)
 
     if phase == "plan":
         prompt = (
-            f"Read the deployment architecture at {deploy_path}/deployment.md.\n\n"
-            f"1. Generate production-ready Terraform files in {deploy_path}/terraform/code/.\n"
-            f"2. Run the full CLI cycle: fmt → validate → init → plan.\n"
-            f"3. If any step fails, diagnose, fix, and retry (up to 3 attempts).\n"
-            f"4. Stop after a successful plan. Do NOT run terraform apply.\n\n"
+            f"Read the repository context at {deploy_path}/project-profile.md "
+            f"and the Question-Answer pairs at {deploy_path}/QnA.json.\n\n"
+            f"Generation production ready Terraform code where the plan succeeds. \n "
+            f"write Terraform files to {tf_dir}/. "
             f"The state key for S3 backend is: {state_key}\n"
         )
     elif phase == "apply":
         prompt = (
-            f"The Terraform plan has been approved by the user.\n\n"
-            f"1. Run: terraform apply -auto-approve {deploy_path}/terraform/code/terraform.plan\n"
-            f"2. If apply fails, follow the Apply Failure & Partial State Process in your instructions.\n"
-            f"3. After successful apply, save outputs:\n"
-            f"   terraform output -json > {deploy_path}/terraform/code/outputs.json\n\n"
-            f"The state key is: {state_key}\n"
+            f"The Terraform plan has been approved. "
+            f"Apply {tf_dir}/terraform.plan and save outputs to {tf_dir}/outputs.json. "
+            f"State key: {state_key}\n"
         )
     else:
         return TerraformResult(success=False, error=f"Unknown phase: {phase}")
@@ -47,11 +59,12 @@ async def run(deploy_path: str, state_key: str, phase: str = "plan") -> Terrafor
     options = ClaudeAgentOptions(
         model="opus",
         allowed_tools=[
-            "Read", "Write", "Bash", "WebSearch", "WebFetch",
+            "Read", "Write", "Bash",
+            "WebSearch", "WebFetch",
             "mcp__terraform",
         ],
         permission_mode="bypassPermissions",
-        cwd=deploy_path,
+        cwd=str(tf_dir),
         max_turns=75,
         system_prompt=SYSTEM_PROMPT,
     )
@@ -63,25 +76,28 @@ async def run(deploy_path: str, state_key: str, phase: str = "plan") -> Terrafor
             logger.debug("Terraform agent turn %d (%s): %s", turns, phase, type(event).__name__)
 
         if phase == "plan":
-            created = [f for f in EXPECTED_FILES if (tf_dir / f).exists()]
-            missing = [f for f in EXPECTED_FILES if f not in created]
+            created = _discover_tf_files(tf_dir)
+            missing_required = [f for f in REQUIRED_FILES if f not in created]
 
-            if missing:
+            if missing_required:
                 return TerraformResult(
                     success=False,
                     files_created=created,
-                    error=f"Missing expected files: {missing}",
+                    error=f"Missing required files: {missing_required}",
                 )
 
-            plan_file = tf_dir / "terraform.plan"
-            if not plan_file.exists():
+            plan_error = _validate_plan_file(tf_dir)
+            if plan_error:
                 return TerraformResult(
                     success=False,
                     files_created=created,
-                    error="Plan file not created — plan likely failed",
+                    error=plan_error,
                 )
 
-            logger.info("Terraform plan completed in %d turns. Files: %s", turns, created)
+            logger.info(
+                "Terraform plan completed in %d turns. Files: %s",
+                turns, created,
+            )
             return TerraformResult(success=True, files_created=created)
 
         elif phase == "apply":
@@ -92,13 +108,14 @@ async def run(deploy_path: str, state_key: str, phase: str = "plan") -> Terrafor
                     error="outputs.json not created — apply likely failed",
                 )
 
+            created = _discover_tf_files(tf_dir)
             logger.info("Terraform apply completed in %d turns", turns)
-            return TerraformResult(success=True)
+            return TerraformResult(success=True, files_created=created)
 
     except Exception as e:
         logger.error("Terraform agent failed (%s): %s", phase, e, exc_info=True)
         return TerraformResult(
             success=False,
-            files_created=[f for f in EXPECTED_FILES if (tf_dir / f).exists()],
+            files_created=_discover_tf_files(tf_dir),
             error=str(e),
         )

@@ -1,0 +1,22 @@
+services:
+  customize:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: deplai-customize
+    ports:
+      - "8002:8002"
+    env_file:
+      - .env
+    environment:
+      - HOST_PROJECTS_DIR=${HOST_PROJECTS_DIR}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${HOST_PROJECTS_DIR}:/local-projects:ro
+    networks:
+      - deplai
+    restart: unless-stopped
+
+networks:
+  deplai:
+    driver: bridge

@@ -14,10 +14,6 @@ export function getProjectPath(userId: string, projectId: string): string {
   return path.join(LOCAL_PROJECTS_BASE, userId, projectId);
 }
 
-export function getZipPath(userId: string, projectId: string): string {
-  return path.join(LOCAL_PROJECTS_BASE, userId, `${projectId}.zip`);
-}
-
 function validatePath(projectPath: string, requestedPath: string): string {
   const fullPath = path.join(projectPath, requestedPath);
   const normalizedPath = path.normalize(fullPath);
@@ -60,13 +56,11 @@ export async function extractZipToProject(
   ensureBaseDirectory();
 
   const projectPath = getProjectPath(userId, projectId);
-  const zipFilePath = getZipPath(userId, projectId);
 
   fs.rmSync(projectPath, { recursive: true, force: true });
   fs.mkdirSync(projectPath, { recursive: true });
 
   try {
-    fs.writeFileSync(zipFilePath, zipBuffer);
 
     const zip = new AdmZip(zipBuffer);
     const zipEntries = zip.getEntries();
@@ -101,14 +95,12 @@ export async function extractZipToProject(
     };
   } catch (error: any) {
     fs.rmSync(projectPath, { recursive: true, force: true });
-    fs.rmSync(zipFilePath, { force: true });
     throw new Error(`Failed to extract zip: ${error.message}`);
   }
 }
 
 export function deleteProject(userId: string, projectId: string): void {
   fs.rmSync(getProjectPath(userId, projectId), { recursive: true, force: true });
-  fs.rmSync(getZipPath(userId, projectId), { force: true });
 
   const userDir = path.join(LOCAL_PROJECTS_BASE, userId);
   if (fs.existsSync(userDir) && fs.readdirSync(userDir).length === 0) {

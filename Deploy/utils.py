@@ -3,7 +3,7 @@ import docker
 
 _docker_client: docker.DockerClient | None = None
 
-CODEBASE_VOLUME = "Codebase"
+CODEBASE_VOLUME = "deployCode"
 DEPLOY_VOLUME = "Deploy"
 
 PIPELINE_IMAGE = "deplai-deploy"

@@ -20,7 +20,7 @@ async def run_analyze(project_name: str, project_id: str):
     success = await run("/workspace/codebase", "/workspace/deploy")
 
     if success:
-        await _on_message("success", "Repository analysis complete — context.md generated")
+        await _on_message("success", "Repository analysis complete — project-profile.md generated")
     else:
         await _on_message("error", "Repository analysis failed")
     _emit_result(success, "analyze")
@@ -45,19 +45,6 @@ async def run_clarify(project_name: str, project_id: str):
     else:
         await _on_message("error", "Failed to generate clarification questions")
     _emit_result(success, "clarify")
-
-
-async def run_synthesize(project_name: str, project_id: str):
-    from agent.synthesize import run
-
-    await _on_message("phase", "Generating deployment architecture")
-    success = await run("/workspace/deploy")
-
-    if success:
-        await _on_message("success", "Deployment architecture generated — deployment.md ready")
-    else:
-        await _on_message("error", "Architecture synthesis failed")
-    _emit_result(success, "synthesize")
 
 
 async def run_terraform(project_name: str, project_id: str, user_id: str):
@@ -91,7 +78,6 @@ async def run_terraform_apply(project_name: str, project_id: str, user_id: str):
 PHASE_RUNNERS = {
     "analyze": lambda args: run_analyze(args.project_name, args.project_id),
     "clarify": lambda args: run_clarify(args.project_name, args.project_id),
-    "synthesize": lambda args: run_synthesize(args.project_name, args.project_id),
     "terraform": lambda args: run_terraform(args.project_name, args.project_id, args.user_id),
     "terraform_apply": lambda args: run_terraform_apply(args.project_name, args.project_id, args.user_id),
 }
