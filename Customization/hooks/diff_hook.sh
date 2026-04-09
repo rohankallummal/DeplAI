@@ -36,8 +36,8 @@ def build_hunk(fp, old_s, new_s):
         pos = file_content.find(old_s)
         if pos >= 0:
             start_line = file_content[:pos].count('\n')
-            old_lines = old_s.split('\n')
-            new_lines = new_s.split('\n')
+            old_lines = old_s.split('\n') if old_s else []
+            new_lines = new_s.split('\n') if new_s else []
 
             ctx_start = max(0, start_line - CONTEXT)
             for i in range(ctx_start, start_line):
@@ -77,9 +77,39 @@ def write_text(path, text):
     with open(path, 'w') as f:
         f.write(text)
 
+def hunk_sort_key(h):
+    for line in h.get('lines', []):
+        if 'num' in line:
+            return line['num']
+    return float('inf')
+
+def merge_overlapping_hunks(hunks):
+    if len(hunks) <= 1:
+        return hunks
+    merged = [{'lines': list(hunks[0]['lines'])}]
+    for hunk in hunks[1:]:
+        prev = merged[-1]
+        prev_lines = prev['lines']
+        curr_lines = list(hunk['lines'])
+        if not prev_lines or not curr_lines:
+            merged.append({'lines': curr_lines})
+            continue
+        prev_max = max(l['num'] for l in prev_lines)
+        curr_min = min(l['num'] for l in curr_lines)
+        if curr_min <= prev_max:
+            curr_edit_nums = set(l['num'] for l in curr_lines if l['type'] != 'ctx')
+            trimmed_prev = [l for l in prev_lines if not (l['type'] == 'ctx' and l['num'] in curr_edit_nums)]
+            trimmed_curr = [l for l in curr_lines if not (l['type'] == 'ctx' and l['num'] <= prev_max)]
+            prev['lines'] = trimmed_prev + trimmed_curr
+        else:
+            merged.append({'lines': curr_lines})
+    return merged
+
 def send_and_wait(fp, hunks):
     \"\"\"Write pending diff for the runner, poll for user response.
     Returns True if approved.\"\"\"
+    hunks = merge_overlapping_hunks(sorted(hunks, key=hunk_sort_key))
+
     for f in (PENDING, RESPONSE):
         try: os.remove(f)
         except FileNotFoundError: pass

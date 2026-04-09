@@ -86,6 +86,13 @@ body {
   font-family: 'Noto Sans', sans-serif;
 }
 
+.scrollbar-hidden {
+  scrollbar-width: none;
+}
+.scrollbar-hidden::-webkit-scrollbar {
+  display: none;
+}
+
 .monitor-terminal::-webkit-scrollbar {
   width: 6px;
 }

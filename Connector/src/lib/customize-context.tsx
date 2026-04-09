@@ -4,7 +4,7 @@ import { createContext, useContext, useState, useRef, useCallback, useMemo } fro
 
 const WS_BASE_URL = process.env.NEXT_PUBLIC_CUSTOMIZE_WS_URL || 'ws://localhost:8002';
 
-export type CustomizePhase = 'idle' | 'executing' | 'waiting_diff' | 'completed' | 'error' | 'saving';
+export type CustomizePhase = 'idle' | 'preparing' | 'executing' | 'waiting_diff' | 'completed' | 'error' | 'saving';
 
 export interface DiffLine {
   type: 'ctx' | 'add' | 'del';
@@ -86,6 +86,7 @@ async function fetchWsToken(): Promise<string> {
 
 const STATUS_MAP: Record<string, CustomizePhase> = {
   running: 'idle',
+  preparing: 'preparing',
   executing: 'executing',
   waiting_diff: 'waiting_diff',
   completed: 'completed',
@@ -93,7 +94,7 @@ const STATUS_MAP: Record<string, CustomizePhase> = {
   error: 'error',
 };
 
-const ACTIVE_PHASES: CustomizePhase[] = ['executing', 'waiting_diff', 'saving'];
+const ACTIVE_PHASES: CustomizePhase[] = ['preparing', 'executing', 'waiting_diff', 'saving'];
 
 export function CustomizeProvider({ children }: { children: React.ReactNode }) {
   const [states, setStates] = useState<Record<string, ProjectCustomizeState>>({});

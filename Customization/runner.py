@@ -68,6 +68,7 @@ class CustomizationRunner(RunnerBase):
         self._check_cancelled()
 
         # Copy codebase into volume
+        await self._send_status(StreamStatus.preparing)
         logger.info(f"Copying codebase into Docker volume for project {self.project_id}")
         success, error_msg = await asyncio.to_thread(self._copy_codebase_to_volume)
         if not success:
@@ -205,6 +206,35 @@ class CustomizationRunner(RunnerBase):
             hunks = json.loads(decode_output(out_acc))
             if not hunks:
                 return
+
+            # Sort hunks by first line number so diffs read top-to-bottom
+            def _hunk_sort_key(h):
+                for line in h.get("lines", []):
+                    if "num" in line:
+                        return line["num"]
+                return float("inf")
+            hunks.sort(key=_hunk_sort_key)
+
+            # Merge overlapping context between adjacent hunks
+            if len(hunks) > 1:
+                merged = [{"lines": list(hunks[0]["lines"])}]
+                for hunk in hunks[1:]:
+                    prev = merged[-1]
+                    prev_lines = prev["lines"]
+                    curr_lines = list(hunk["lines"])
+                    if not prev_lines or not curr_lines:
+                        merged.append({"lines": curr_lines})
+                        continue
+                    prev_max = max(l["num"] for l in prev_lines)
+                    curr_min = min(l["num"] for l in curr_lines)
+                    if curr_min <= prev_max:
+                        curr_edit_nums = set(l["num"] for l in curr_lines if l["type"] != "ctx")
+                        trimmed_prev = [l for l in prev_lines if not (l["type"] == "ctx" and l["num"] in curr_edit_nums)]
+                        trimmed_curr = [l for l in curr_lines if not (l["type"] == "ctx" and l["num"] <= prev_max)]
+                        prev["lines"] = trimmed_prev + trimmed_curr
+                    else:
+                        merged.append({"lines": curr_lines})
+                hunks = merged
 
             ec_fp, out_fp = await asyncio.to_thread(
                 self._container.exec_run,

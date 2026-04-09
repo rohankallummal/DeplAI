@@ -29,6 +29,7 @@ class WebSocketCommand(BaseModel):
 
 class StreamStatus(str, Enum):
     running = "running"
+    preparing = "preparing"
     executing = "executing"
     waiting_diff = "waiting_diff"
     completed = "completed"

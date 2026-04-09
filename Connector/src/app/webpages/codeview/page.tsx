@@ -660,50 +660,64 @@ function RepositoryBrowserContent() {
       {exitPopupStep && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center">
           <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
-          <div className="relative bg-surface rounded-xl shadow-2xl max-w-sm mx-4 px-8 py-8">
-            {exitPopupStep === 'confirm_exit' ? (
-              <>
-                <h3 className="text-lg font-semibold text-foreground mb-2">Exit chat?</h3>
-                <p className="text-sm text-muted mb-6">You have unsaved changes. Are you sure you want to exit?</p>
-                <div className="flex gap-3 justify-end">
-                  <button
-                    onClick={() => setExitPopupStep(null)}
-                    className="px-4 py-2 text-sm rounded-lg border border-border text-foreground hover:bg-surface-hover transition"
-                  >
-                    Stay
-                  </button>
-                  <button
-                    onClick={() => setExitPopupStep('confirm_save')}
-                    className="px-4 py-2 text-sm rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition"
-                  >
-                    Yes, exit
-                  </button>
+          <div className="relative w-full max-w-[680px] mx-4 rounded-2xl shadow-2xl overflow-hidden bg-surface border border-border">
+            <div className="px-10 py-12">
+              <button
+                onClick={() => setExitPopupStep(null)}
+                className="absolute top-5 right-5 p-2 text-muted hover:text-foreground hover:bg-surface-hover rounded-lg transition"
+                title="Close"
+                aria-label="Close"
+              >
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M18 6L6 18" />
+                  <path d="M6 6l12 12" />
+                </svg>
+              </button>
+
+              {exitPopupStep === 'confirm_exit' ? (
+                <div className="flex flex-col items-center text-center">
+                  <h2 className="text-2xl font-bold text-foreground mb-3">Exit chat?</h2>
+                  <p className="text-muted text-base mb-10">You have unsaved changes. Are you sure you want to exit?</p>
+                  <div className="flex gap-3">
+                    <button
+                      onClick={() => setExitPopupStep(null)}
+                      className="flex items-center justify-center gap-2 py-3 px-8 bg-surface-hover hover:bg-border text-foreground font-semibold rounded-xl transition border border-border cursor-pointer"
+                    >
+                      Stay
+                    </button>
+                    <button
+                      onClick={() => setExitPopupStep('confirm_save')}
+                      className="flex items-center justify-center gap-2 py-3 px-8 bg-surface-hover hover:bg-border text-foreground font-semibold rounded-xl transition border border-border cursor-pointer"
+                    >
+                      Exit
+                    </button>
+                  </div>
                 </div>
-              </>
-            ) : (
-              <>
-                <h3 className="text-lg font-semibold text-foreground mb-2">Save changes?</h3>
-                <p className="text-sm text-muted mb-6">
-                  {isLocal
-                    ? 'Your changes will be saved to the project files.'
-                    : 'A pull request will be created with your changes.'}
-                </p>
-                <div className="flex gap-3 justify-end">
-                  <button
-                    onClick={handleExitDiscard}
-                    className="px-4 py-2 text-sm rounded-lg border border-border text-foreground hover:bg-surface-hover transition"
-                  >
-                    Discard
-                  </button>
-                  <button
-                    onClick={handleExitSave}
-                    className="px-4 py-2 text-sm rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition"
-                  >
-                    Save
-                  </button>
+              ) : (
+                <div className="flex flex-col items-center text-center">
+                  <h2 className="text-2xl font-bold text-foreground mb-3">Save changes?</h2>
+                  <p className="text-muted text-base mb-10">
+                    {isLocal
+                      ? 'Your changes will be saved to the project files.'
+                      : 'A pull request will be created with your changes.'}
+                  </p>
+                  <div className="flex gap-3">
+                    <button
+                      onClick={handleExitDiscard}
+                      className="flex items-center justify-center gap-2 py-3 px-8 bg-surface-hover hover:bg-border text-foreground font-semibold rounded-xl transition border border-border cursor-pointer"
+                    >
+                      Discard
+                    </button>
+                    <button
+                      onClick={handleExitSave}
+                      className="flex items-center justify-center gap-2 py-3 px-8 bg-surface-hover hover:bg-border text-foreground font-semibold rounded-xl transition border border-border cursor-pointer"
+                    >
+                      Save
+                    </button>
+                  </div>
                 </div>
-              </>
-            )}
+              )}
+            </div>
           </div>
         </div>
       )}
