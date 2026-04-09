@@ -161,7 +161,7 @@ export default function Dashboard() {
     if (project.type === 'local') {
       router.push(`/webpages/codeview?project_id=${project.id}&type=local`);
     } else {
-      router.push(`/webpages/codeview?owner=${project.owner}&repo=${project.repo}&type=github`);
+      router.push(`/webpages/codeview?project_id=${project.id}&owner=${project.owner}&repo=${project.repo}&type=github`);
     }
   }
 

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireAuth, verifyProjectOwnership } from '@/lib/auth';
+import { requireAuth, verifyProjectOwnership, verifyRepositoryOwnership } from '@/lib/auth';
 import { githubService } from '@/lib/github';
 import { CUSTOMIZE_URL, customizeHeaders } from '@/lib/customize';
 
@@ -19,9 +19,6 @@ export async function POST(request: NextRequest) {
       default_branch,
     } = body;
 
-    const ownership = await verifyProjectOwnership(user.id, project_id);
-    if (ownership.error) return ownership.error;
-
     const backendPayload: Record<string, any> = {
       project_id,
       project_name,
@@ -30,6 +27,17 @@ export async function POST(request: NextRequest) {
     };
 
     if (project_type === 'github' && owner && repo) {
+      const ownership = await verifyRepositoryOwnership(user.id, owner, repo);
+      if (!ownership) {
+        return NextResponse.json({ error: 'Repository not found or access denied' }, { status: 403 });
+      }
+      if (ownership.suspended) {
+        return NextResponse.json(
+          { error: 'GitHub App installation is suspended. Unsuspend before customizing.' },
+          { status: 403 }
+        );
+      }
+
       try {
         const token = await githubService.getInstallationToken(installation_id);
         backendPayload.github_token = token;
@@ -40,10 +48,13 @@ export async function POST(request: NextRequest) {
       } catch (err) {
         console.error('Failed to get GitHub token:', err);
         return NextResponse.json(
-          { error: 'Failed to authenticate with GitHub.' },
+          { error: 'Failed to authenticate with GitHub. The installation may be suspended or removed.' },
           { status: 403 }
         );
       }
+    } else {
+      const ownershipCheck = await verifyProjectOwnership(user.id, project_id);
+      if (ownershipCheck.error) return ownershipCheck.error;
     }
 
     const response = await fetch(`${CUSTOMIZE_URL}/api/customize/validate`, {

@@ -435,7 +435,7 @@ export default function Projects({
             </div>
           </div>
 
-          <div className="p-6 max-h-[500px] overflow-y-auto">
+          <div className="p-6 max-h-[500px] overflow-y-auto scrollbar-hidden">
             {loading ? (
               <LoadingSpinner size="md" className="py-12" />
             ) : projects.length === 0 ? (

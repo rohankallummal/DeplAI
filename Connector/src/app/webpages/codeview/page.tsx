@@ -67,6 +67,7 @@ function RepositoryBrowserContent() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isSuspended, setIsSuspended] = useState(false);
+  const [installationId, setInstallationId] = useState<string | null>(null);
   const [chatOpen, setChatOpen] = useState(false);
   const chatBlockingRef = useRef(false);
   const [username, setUsername] = useState('');
@@ -107,6 +108,7 @@ function RepositoryBrowserContent() {
         body.owner = owner;
         body.repo = repo;
         body.default_branch = currentBranch || defaultBranch || 'main';
+        if (installationId) body.installation_id = installationId;
       }
 
       await fetch('/api/customize/validate', {
@@ -166,6 +168,7 @@ function RepositoryBrowserContent() {
         fetchContents();
       } else if (!isLocal && owner && repo && currentBranch) {
         setProjectName(repo);
+        if (projectId) fetchProjectDetails();
         fetchContents();
       }
     }
@@ -190,13 +193,16 @@ function RepositoryBrowserContent() {
   }
 
   async function fetchProjectDetails() {
-    if (!isLocal || !projectId) return;
-    
+    if (!projectId) return;
+
     try {
       const res = await fetch(`/api/projects/${projectId}`);
       if (res.ok) {
         const data = await res.json();
         setProjectName(data.project.name);
+        if (data.project.installationId) {
+          setInstallationId(data.project.installationId);
+        }
       }
     } catch (err) {
       console.error('Failed to fetch project details:', err);
@@ -327,7 +333,7 @@ function RepositoryBrowserContent() {
       return `/webpages/codeview?project_id=${projectId}&type=local${navPath ? `&path=${navPath}` : ''}`;
     }
     const b = branch || currentBranch;
-    return `/webpages/codeview?owner=${owner}&repo=${repo}&type=github${b ? `&branch=${encodeURIComponent(b)}` : ''}${navPath ? `&path=${navPath}` : ''}`;
+    return `/webpages/codeview?project_id=${projectId}&owner=${owner}&repo=${repo}&type=github${b ? `&branch=${encodeURIComponent(b)}` : ''}${navPath ? `&path=${navPath}` : ''}`;
   }
 
   function handleDirectoryClick(itemPath: string) {
