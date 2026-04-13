@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { useCustomize, type ChatMessage, type DiffPreview, type DiffHunk, type DiffLine } from '@/lib/customize-context';
+import { useCustomize, type DiffPreview, type DiffLine, type BuilderStatus } from '@/lib/customize-context';
 
 function getGreeting(): string {
   const hour = new Date().getHours();
@@ -115,14 +115,35 @@ function ThinkingDots({ label = 'Thinking' }: { label?: string }) {
   return <span className="text-blue-400">{label}{dots}</span>;
 }
 
+/* ── Builder Status ────────────────────────────────────────────── */
+
+function BuilderStatusIndicator({ status }: { status: BuilderStatus }) {
+  if (status === 'idle') return null;
+
+  const config: Record<string, { label: string; color: string; animate: boolean }> = {
+    running: { label: 'Verifying the build', color: 'text-amber-400', animate: true },
+    fixing: { label: 'Fixing issues', color: 'text-amber-400', animate: true },
+    passed: { label: 'All changes have been implemented', color: 'text-foreground', animate: false },
+    failed: { label: 'Build has unresolved issues', color: 'text-red-400', animate: false },
+  };
+
+  const c = config[status] || config.running;
+
+  return (
+    <div className="pl-7 mt-2">
+      <span className={`text-sm ${c.color}`}>{c.animate ? <ThinkingDots label={c.label} /> : c.label}</span>
+    </div>
+  );
+}
+
 /* ── Chat Input ────────────────────────────────────────────────── */
 
-function ChatInput({ input, onChange, onKeyDown, onSend, disabled }: {
+function ChatInput({ input, onChange, onKeyDown, onSend, canSend }: {
   input: string;
   onChange: (value: string) => void;
   onKeyDown: (e: React.KeyboardEvent) => void;
   onSend: () => void;
-  disabled?: boolean;
+  canSend: boolean;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const MAX_VISIBLE_LINES = 6;
@@ -130,14 +151,12 @@ function ChatInput({ input, onChange, onKeyDown, onSend, disabled }: {
   useEffect(() => {
     const ta = textareaRef.current;
     if (!ta) return;
-    // Reset to natural rows-based height so scrollHeight is measured reliably
     ta.style.height = 'auto';
     const lineHeight = parseFloat(getComputedStyle(ta).lineHeight) || 21;
     const maxHeight = lineHeight * MAX_VISIBLE_LINES;
     const contentHeight = ta.scrollHeight;
     ta.style.height = `${Math.min(contentHeight, maxHeight)}px`;
     ta.style.overflowY = contentHeight > maxHeight ? 'auto' : 'hidden';
-    // Prevent stale scroll offset from creating a gap above the text
     if (contentHeight <= maxHeight) {
       ta.scrollTop = 0;
     }
@@ -150,16 +169,15 @@ function ChatInput({ input, onChange, onKeyDown, onSend, disabled }: {
         value={input}
         onChange={e => onChange(e.target.value)}
         onKeyDown={onKeyDown}
-        placeholder={disabled ? 'Waiting for agent...' : 'What UI tweak do you want to implement?'}
-        disabled={disabled}
+        placeholder="What UI tweak do you want to implement?"
         rows={1}
-        className="flex-1 bg-transparent text-foreground placeholder-muted outline-none resize-none text-sm disabled:opacity-50 scrollbar-hidden"
+        className="flex-1 bg-transparent text-foreground placeholder-muted outline-none resize-none text-sm scrollbar-hidden"
       />
       {input.trim() && (
         <button
           onClick={onSend}
-          disabled={disabled}
-          className="p-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition disabled:opacity-40 disabled:cursor-not-allowed"
+          disabled={!canSend}
+          className={`p-2 rounded-lg bg-blue-600 text-white transition ${canSend ? 'hover:bg-blue-700' : 'opacity-40 cursor-not-allowed'}`}
         >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
             <path d="M22 2L11 13" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
@@ -189,8 +207,9 @@ export default function ChatInterface({
 
   const messages = state.chatMessages ?? [];
   const phase = state.phase ?? 'idle';
-  const isProcessing = ['preparing', 'planning', 'executing', 'saving'].includes(phase);
-  const isDisabled = isProcessing;
+  const builderStatus = state.builderStatus ?? 'idle';
+  const isBusy = ['preparing', 'planning', 'executing', 'building', 'build_fixing', 'saving'].includes(phase);
+  const canSend = !isBusy;
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -198,7 +217,7 @@ export default function ChatInterface({
 
   function handleSend() {
     const text = input.trim();
-    if (!text || isDisabled) return;
+    if (!text || !canSend) return;
     sendChatMessage(projectId, text);
     setInput('');
   }
@@ -206,7 +225,7 @@ export default function ChatInterface({
   function handleKeyDown(e: React.KeyboardEvent) {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      handleSend();
+      if (canSend) handleSend();
     }
   }
 
@@ -243,7 +262,7 @@ export default function ChatInterface({
                   onChange={setInput}
                   onKeyDown={handleKeyDown}
                   onSend={handleSend}
-                  disabled={isDisabled}
+                  canSend={canSend}
                 />
               </div>
             </>
@@ -306,10 +325,6 @@ export default function ChatInterface({
                 return (
                   <div key={msg.id} className="flex justify-start">
                     <div className="pl-7">
-                      <div className="flex items-center gap-2 mb-1.5">
-                        <svg width="34" height="34" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12.0672 2C9.6678 2 7.72266 3.94514 7.72266 6.34459C7.72266 8.74404 9.6678 10.6892 12.0672 10.6892C14.4667 10.6892 16.4118 8.74404 16.4118 6.34459C16.4118 3.94514 14.4667 2 12.0672 2Z" fill="currentColor"/><path d="M20.25 19.453C20.2421 19.8615 19.9087 20.1895 19.5001 20.1895H4.50013C4.09157 20.1895 3.75818 19.8624 3.75027 19.454L3.75023 19.452L3.75019 19.4493L3.7501 19.4423L3.75 19.4211C3.74999 19.404 3.75015 19.3807 3.75072 19.3516C3.75187 19.2937 3.75468 19.2127 3.76117 19.1119C3.77413 18.9107 3.80189 18.6292 3.86099 18.2937C3.97867 17.6258 4.22374 16.7262 4.73808 15.8194C5.79641 13.9537 7.92408 12.1895 12.0001 12.1895C16.0762 12.1895 18.2038 13.9537 19.2622 15.8194C19.7765 16.7262 20.0216 17.6258 20.1393 18.2937C20.1984 18.6292 20.2261 18.9107 20.2391 19.1119C20.2456 19.2127 20.2484 19.2937 20.2495 19.3516C20.2501 19.3807 20.2503 19.404 20.2503 19.4211L20.2502 19.4423L20.2501 19.4493L20.25 19.452L20.25 19.453Z" fill="currentColor"/></svg>
-                        <span className="text-xs font-semibold text-indigo-400">Styler</span>
-                      </div>
                       <div className="text-sm text-foreground leading-relaxed">
                         {msg.content}
                       </div>
@@ -318,13 +333,14 @@ export default function ChatInterface({
                 );
               })}
 
-              {/* Thinking indicator */}
-              {isProcessing && (
+              {/* Builder status indicator */}
+              {builderStatus !== 'idle' && (
+                <BuilderStatusIndicator status={builderStatus} />
+              )}
+
+              {/* Thinking indicator (not shown during builder phases — BuilderStatusIndicator handles those) */}
+              {(phase === 'preparing' || phase === 'executing' || phase === 'saving') && (
                 <div className="pl-7">
-                  <div className="flex items-center gap-2 mb-1.5">
-                    <svg width="34" height="34" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12.0672 2C9.6678 2 7.72266 3.94514 7.72266 6.34459C7.72266 8.74404 9.6678 10.6892 12.0672 10.6892C14.4667 10.6892 16.4118 8.74404 16.4118 6.34459C16.4118 3.94514 14.4667 2 12.0672 2Z" fill="currentColor"/><path d="M20.25 19.453C20.2421 19.8615 19.9087 20.1895 19.5001 20.1895H4.50013C4.09157 20.1895 3.75818 19.8624 3.75027 19.454L3.75023 19.452L3.75019 19.4493L3.7501 19.4423L3.75 19.4211C3.74999 19.404 3.75015 19.3807 3.75072 19.3516C3.75187 19.2937 3.75468 19.2127 3.76117 19.1119C3.77413 18.9107 3.80189 18.6292 3.86099 18.2937C3.97867 17.6258 4.22374 16.7262 4.73808 15.8194C5.79641 13.9537 7.92408 12.1895 12.0001 12.1895C16.0762 12.1895 18.2038 13.9537 19.2622 15.8194C19.7765 16.7262 20.0216 17.6258 20.1393 18.2937C20.1984 18.6292 20.2261 18.9107 20.2391 19.1119C20.2456 19.2127 20.2484 19.2937 20.2495 19.3516C20.2501 19.3807 20.2503 19.404 20.2503 19.4211L20.2502 19.4423L20.2501 19.4493L20.25 19.452L20.25 19.453Z" fill="currentColor"/></svg>
-                    <span className="text-xs font-semibold text-indigo-400">Styler</span>
-                  </div>
                   <ThinkingDots label={phase === 'preparing' ? 'Gathering codebase context' : 'Thinking'} />
                 </div>
               )}
@@ -343,7 +359,7 @@ export default function ChatInterface({
             onChange={setInput}
             onKeyDown={handleKeyDown}
             onSend={handleSend}
-            disabled={isDisabled || phase === 'waiting_diff'}
+            canSend={canSend}
           />
         </div>
       )}

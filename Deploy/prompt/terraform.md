@@ -14,8 +14,6 @@ You have direct access to the Terraform CLI via Bash.
 
 ---
 
----
-
 # Knowledge Sources
 
 ## Terraform Registry (AWS)

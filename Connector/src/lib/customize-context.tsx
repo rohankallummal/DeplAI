@@ -4,7 +4,7 @@ import { createContext, useContext, useState, useRef, useCallback, useMemo } fro
 
 const WS_BASE_URL = process.env.NEXT_PUBLIC_CUSTOMIZE_WS_URL || 'ws://localhost:8002';
 
-export type CustomizePhase = 'idle' | 'preparing' | 'executing' | 'waiting_diff' | 'completed' | 'error' | 'saving';
+export type CustomizePhase = 'idle' | 'preparing' | 'executing' | 'waiting_diff' | 'building' | 'build_fixing' | 'completed' | 'error' | 'saving';
 
 export interface DiffLine {
   type: 'ctx' | 'add' | 'del';
@@ -33,12 +33,15 @@ export interface ChatMessage {
   timestamp: string;
 }
 
+export type BuilderStatus = 'idle' | 'running' | 'passed' | 'fixing' | 'failed';
+
 interface ProjectCustomizeState {
   phase: CustomizePhase;
   chatMessages: ChatMessage[];
   projectName: string;
   changesMade: boolean;
   currentDiff: DiffPreview | null;
+  builderStatus: BuilderStatus;
 }
 
 interface CustomizeContextValue {
@@ -67,6 +70,7 @@ const DEFAULT_STATE: ProjectCustomizeState = {
   projectName: '',
   changesMade: false,
   currentDiff: null,
+  builderStatus: 'idle',
 };
 
 function genId(): string {
@@ -89,12 +93,12 @@ const STATUS_MAP: Record<string, CustomizePhase> = {
   preparing: 'preparing',
   executing: 'executing',
   waiting_diff: 'waiting_diff',
+  building: 'building',
+  build_fixing: 'build_fixing',
   completed: 'completed',
   saving: 'saving',
   error: 'error',
 };
-
-const ACTIVE_PHASES: CustomizePhase[] = ['preparing', 'executing', 'waiting_diff', 'saving'];
 
 export function CustomizeProvider({ children }: { children: React.ReactNode }) {
   const [states, setStates] = useState<Record<string, ProjectCustomizeState>>({});
@@ -168,6 +172,15 @@ export function CustomizeProvider({ children }: { children: React.ReactNode }) {
           break;
         }
 
+        case 'builder_status': {
+          const bStatus = data.data?.status || 'idle';
+          setStates(prev => ({
+            ...prev,
+            [projectId]: { ...getOrDefault(prev, projectId), builderStatus: bStatus },
+          }));
+          break;
+        }
+
         case 'result': {
           setStates(prev => ({
             ...prev,
@@ -177,13 +190,13 @@ export function CustomizeProvider({ children }: { children: React.ReactNode }) {
               changesMade: data.data?.changes_made || false,
             },
           }));
-          addChatMessage(projectId, {
-            role: 'agent',
-            type: 'text',
-            content: data.data?.changes_made
-              ? 'All changes have been applied.'
-              : 'Customization complete. No changes were applied.',
-          });
+          if (!data.data?.changes_made) {
+            addChatMessage(projectId, {
+              role: 'agent',
+              type: 'text',
+              content: 'Customization complete. No changes were applied.',
+            });
+          }
           break;
         }
 

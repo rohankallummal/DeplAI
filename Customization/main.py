@@ -39,7 +39,7 @@ customize_contexts: dict[str, CustomizeValidationRequest] = {}
 active_customizations: dict[str, CustomizationRunner] = {}
 _last_project_id: str | None = None
 
-ACTIVE_STATUSES = frozenset({"running", "planning", "executing", "waiting_diff", "saving"})
+ACTIVE_STATUSES = frozenset({"running", "executing", "waiting_diff", "building", "build_fixing", "saving"})
 
 
 async def verify_api_key(x_api_key: str = Header(None)):

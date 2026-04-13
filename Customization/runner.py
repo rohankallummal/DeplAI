@@ -48,7 +48,7 @@ class CustomizationRunner(RunnerBase):
         if self._container:
             try:
                 self._container.exec_run(
-                    ["pkill", "-f", "pipeline.py"],
+                    ["sh", "-c", "pkill -f pipeline.py; pkill -f diff_daemon"],
                     detach=True,
                 )
             except Exception:
@@ -88,6 +88,20 @@ class CustomizationRunner(RunnerBase):
             user="root",
         )
 
+        # Start diff daemon (eliminates ~100-300ms Python cold-start per Edit call)
+        await asyncio.to_thread(
+            self._container.exec_run,
+            [
+                "sh", "-c",
+                "pkill -f diff_daemon 2>/dev/null; sleep 0.2; "
+                "nohup python3 /app/hooks/diff_daemon.py > /dev/null 2>&1 &",
+            ],
+            user="agent",
+            environment={"HOME": "/home/agent"},
+        )
+        await asyncio.sleep(0.3)
+        logger.info("Diff daemon started")
+
         # Verify Claude CLI
         exit_code, diag_output = await asyncio.to_thread(
             self._container.exec_run,
@@ -115,7 +129,7 @@ class CustomizationRunner(RunnerBase):
         logger.info("Starting styler agent")
 
         self._agent_done.clear()
-        execute_task = asyncio.create_task(self._run_agent_phase_async(
+        execute_task = asyncio.create_task(self._run_agent_phase(
             "execute",
             extra_args=["--user-request", self._chat_message],
         ))
@@ -130,6 +144,10 @@ class CustomizationRunner(RunnerBase):
                 logger.warning("Styler had errors but some changes were applied")
             else:
                 return await self._terminate("Something went wrong. Please try again.")
+
+        # Run Builder agent to verify build stability
+        if self._changes_made:
+            await self._run_builder()
 
         await self._send_status(StreamStatus.completed)
         await self._send_result({
@@ -169,42 +187,103 @@ class CustomizationRunner(RunnerBase):
         return approved
 
     async def _monitor_diffs(self):
-        """Poll for pending file-level diffs and relay to frontend."""
+        """Watch for pending file-level diffs and relay to frontend.
+        Uses inotifywait for event-driven detection instead of polling."""
         while not self._cancelled and not self._agent_done.is_set():
             try:
+                # Check if a pending diff already exists
                 exit_code, output = await asyncio.to_thread(
                     self._container.exec_run,
                     ["cat", "/workspace/customize/pending_diff.json"],
                     user="agent",
                 )
                 if exit_code == 0:
-                    diff_data = json.loads(decode_output(output))
-                    await self._handle_diff_approval(diff_data)
-            except json.JSONDecodeError:
-                pass
+                    try:
+                        diff_data = json.loads(decode_output(output))
+                    except json.JSONDecodeError:
+                        pass
+                    else:
+                        # Remove immediately to prevent re-read on next iteration
+                        await asyncio.to_thread(
+                            self._container.exec_run,
+                            ["rm", "-f", "/workspace/customize/pending_diff.json"],
+                            user="agent",
+                        )
+                        await self._handle_diff_approval(diff_data)
+                        continue
+
+                # No diff pending — block until the file appears (1s timeout for cancellation checks)
+                await asyncio.to_thread(
+                    self._container.exec_run,
+                    [
+                        "inotifywait", "-qq", "-t", "1",
+                        "-e", "close_write,create",
+                        "--include", "pending_diff\\.json",
+                        "/workspace/customize/",
+                    ],
+                    user="agent",
+                )
             except Exception:
                 pass
-
-            await asyncio.sleep(0.5)
 
         # Agent finished — flush remaining edits for the last file
         await self._flush_remaining_edits()
 
     async def _flush_remaining_edits(self):
         """Send any accumulated edits that haven't been reviewed yet
-        (the last file the agent touched has no file-transition to trigger review)."""
+        (the last file the agent touched has no file-transition to trigger review).
+        Queries the diff daemon for in-memory state instead of reading files."""
         if self._cancelled:
             return
         try:
-            ec_acc, out_acc = await asyncio.to_thread(
+            # Handle any pending diff the monitor loop might have missed
+            # (e.g., daemon wrote pending_diff.json right as agent finished)
+            ec, output = await asyncio.to_thread(
                 self._container.exec_run,
-                ["cat", "/workspace/customize/edit_accumulator.json"],
+                ["cat", "/workspace/customize/pending_diff.json"],
                 user="agent",
             )
-            if ec_acc != 0:
+            if ec == 0:
+                try:
+                    diff_data = json.loads(decode_output(output))
+                    await asyncio.to_thread(
+                        self._container.exec_run,
+                        ["rm", "-f", "/workspace/customize/pending_diff.json"],
+                        user="agent",
+                    )
+                    await self._handle_diff_approval(diff_data)
+                    # Give daemon time to process the response and return to accept()
+                    await asyncio.sleep(0.5)
+                except json.JSONDecodeError:
+                    pass
+
+            # Query daemon for remaining accumulated hunks (last file)
+            state = None
+            for _attempt in range(5):
+                ec, output = await asyncio.to_thread(
+                    self._container.exec_run,
+                    [
+                        "sh", "-c",
+                        "printf '{\"action\":\"get_state\"}' | "
+                        "socat -t5 - UNIX-CONNECT:/workspace/customize/hook.sock 2>/dev/null",
+                    ],
+                    user="agent",
+                )
+                if ec == 0:
+                    try:
+                        state = json.loads(decode_output(output))
+                        break
+                    except json.JSONDecodeError:
+                        pass
+                await asyncio.sleep(0.3)
+
+            if not state:
                 return
-            hunks = json.loads(decode_output(out_acc))
-            if not hunks:
+
+            hunks = state.get("hunks", [])
+            file_path = state.get("current_file", "")
+
+            if not hunks or not file_path:
                 return
 
             # Sort hunks by first line number so diffs read top-to-bottom
@@ -236,17 +315,6 @@ class CustomizationRunner(RunnerBase):
                         merged.append({"lines": curr_lines})
                 hunks = merged
 
-            ec_fp, out_fp = await asyncio.to_thread(
-                self._container.exec_run,
-                ["cat", "/workspace/customize/current_edit_file.txt"],
-                user="agent",
-            )
-            if ec_fp != 0:
-                return
-            file_path = decode_output(out_fp).strip()
-            if not file_path:
-                return
-
             diff_data = {
                 "diff_id": str(uuid.uuid4()),
                 "file_path": file_path,
@@ -262,20 +330,37 @@ class CustomizationRunner(RunnerBase):
                     user="agent",
                 )
 
-            # Clean up state files
+            # Clean up backup
             await asyncio.to_thread(
                 self._container.exec_run,
-                ["sh", "-c", "rm -f /workspace/customize/edit_accumulator.json "
-                             "/workspace/customize/current_edit_file.txt "
-                             "/workspace/customize/file_backup"],
+                ["sh", "-c", "rm -f /workspace/customize/file_backup"],
                 user="agent",
             )
         except Exception as e:
             logger.debug("Flush remaining edits: %s", e)
 
-    async def _run_agent_phase_async(self, phase: str, extra_args: list[str] | None = None) -> dict | None:
-        """Run agent phase and return result. Used with asyncio.create_task."""
-        return await self._run_agent_phase(phase, extra_args=extra_args)
+    async def _run_builder(self):
+        """Run the Builder agent to verify build stability after Styler changes."""
+        self._check_cancelled()
+        await self._send_status(StreamStatus.building)
+        await self._try_send({"type": "builder_status", "data": {"status": "running"}})
+        logger.info("Starting builder agent")
+
+        build_result = await self._run_agent_phase("build")
+        self._check_cancelled()
+
+        if build_result and build_result.get("success"):
+            await self._try_send({"type": "builder_status", "data": {"status": "passed"}})
+            logger.info("Build passed")
+        else:
+            await self._try_send({"type": "builder_status", "data": {"status": "fixing"}})
+            await self._send_status(StreamStatus.build_fixing)
+            logger.warning("Build failed, builder is attempting fixes")
+
+            # The builder agent already attempts fixes internally (up to 3 attempts).
+            # If it still returned failure, report it but don't block the pipeline.
+            await self._try_send({"type": "builder_status", "data": {"status": "failed"}})
+            logger.warning("Builder could not resolve all build errors")
 
     async def _run_agent_phase(self, phase: str, extra_args: list[str] | None = None) -> dict | None:
         cmd = [
@@ -291,7 +376,7 @@ class CustomizationRunner(RunnerBase):
 
         environment = {
             "HOME": "/home/agent",
-            "PATH": "/usr/local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
             "USER": "agent",
             "ANTHROPIC_API_KEY": os.environ.get("ANTHROPIC_API_KEY", ""),
         }
@@ -328,8 +413,7 @@ class CustomizationRunner(RunnerBase):
             finally:
                 msg_q.put(None)
 
-        loop = asyncio.get_event_loop()
-        loop.run_in_executor(None, _read_exec_output)
+        asyncio.get_running_loop().run_in_executor(None, _read_exec_output)
 
         result = None
         while True:
@@ -387,22 +471,17 @@ class CustomizationRunner(RunnerBase):
     def _copy_codebase_to_volume(self) -> tuple[bool, str]:
         """Copy codebase from host into Docker volume."""
         try:
-            user_id = self.context.user_id
-            project_id = self.project_id
-
             if self.context.project_type == "github":
                 return self._clone_github_repo()
 
+            uid, pid = self.context.user_id, self.project_id
             host_base = os.environ.get("HOST_PROJECTS_DIR")
             if host_base:
-                check_path = os.path.join("/local-projects", user_id, project_id)
-                host_path = os.path.join(host_base, user_id, project_id)
+                check_path = os.path.join("/local-projects", uid, pid)
+                host_path = os.path.join(host_base, uid, pid)
             else:
                 host_path = os.path.abspath(
-                    os.path.join(
-                        os.path.dirname(__file__), "..", "Connector", "tmp",
-                        "local-projects", user_id, project_id,
-                    )
+                    os.path.join(os.path.dirname(__file__), "..", "Connector", "tmp", "local-projects", uid, pid)
                 )
                 check_path = host_path
 
@@ -416,23 +495,20 @@ class CustomizationRunner(RunnerBase):
                 user="agent",
             )
 
-            try:
-                output = get_docker_client().containers.run(
-                    "alpine",
-                    command=["sh", "-c", "cp -a /src/. /workspace/codebase/ && echo Success || echo Failed"],
-                    volumes={
-                        CUSTOMIZE_CODE_VOLUME: {"bind": "/workspace/codebase", "mode": "rw"},
-                        host_path: {"bind": "/src", "mode": "ro"},
-                    },
-                    remove=True,
-                )
-                decoded = decode_output(output)
-                if "Success" in decoded:
-                    logger.info("Codebase copied to Docker volume")
-                    return (True, "")
-                return (False, f"Copy failed: {decoded}")
-            except Exception as e:
-                return (False, str(e))
+            output = get_docker_client().containers.run(
+                "alpine",
+                command=["sh", "-c", "cp -a /src/. /workspace/codebase/ && echo Success || echo Failed"],
+                volumes={
+                    CUSTOMIZE_CODE_VOLUME: {"bind": "/workspace/codebase", "mode": "rw"},
+                    host_path: {"bind": "/src", "mode": "ro"},
+                },
+                remove=True,
+            )
+            decoded = decode_output(output)
+            if "Success" in decoded:
+                logger.info("Codebase copied to Docker volume")
+                return (True, "")
+            return (False, f"Copy failed: {decoded}")
         except Exception as e:
             return (False, str(e))
 

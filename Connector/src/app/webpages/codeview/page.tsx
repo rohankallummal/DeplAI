@@ -76,7 +76,7 @@ function RepositoryBrowserContent() {
   const [defaultBranch, setDefaultBranch] = useState<string>('');
   const [branchDropdownOpen, setBranchDropdownOpen] = useState(false);
   const [branchSearch, setBranchSearch] = useState('');
-  const [exitPopupStep, setExitPopupStep] = useState<null | 'confirm_exit' | 'confirm_save'>(null);
+  const [exitPopupOpen, setExitPopupOpen] = useState(false);
 
   usePageLoading(authLoading || !pageReady);
 
@@ -126,7 +126,7 @@ function RepositoryBrowserContent() {
   function handleExitChat() {
     const customizeState = getCustomizeState(projectId);
     if (customizeState.changesMade) {
-      setExitPopupStep('confirm_exit');
+      setExitPopupOpen(true);
       return;
     }
     doExitChat();
@@ -136,9 +136,12 @@ function RepositoryBrowserContent() {
     resetCustomize(projectId);
     chatBlockingRef.current = false;
     setChatOpen(false);
-    setExitPopupStep(null);
+    setExitPopupOpen(false);
     window.history.back();
     if (isLocal) fetchContents();
+
+    // Clean up Docker volumes so next session starts fresh
+    fetch('/api/customize/cleanup', { method: 'POST' }).catch(() => {});
   }
 
   function handleExitSave() {
@@ -663,66 +666,45 @@ function RepositoryBrowserContent() {
       )}
 
       {/* Exit confirmation popup */}
-      {exitPopupStep && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center">
-          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
-          <div className="relative w-full max-w-[680px] mx-4 rounded-2xl shadow-2xl overflow-hidden bg-surface border border-border">
-            <div className="px-10 py-12">
-              <button
-                onClick={() => setExitPopupStep(null)}
-                className="absolute top-5 right-5 p-2 text-muted hover:text-foreground hover:bg-surface-hover rounded-lg transition"
-                title="Close"
-                aria-label="Close"
-              >
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M18 6L6 18" />
-                  <path d="M6 6l12 12" />
-                </svg>
-              </button>
+      {exitPopupOpen && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center animate-[fadeIn_150ms_ease-out]">
+          <div
+            className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+            onClick={() => setExitPopupOpen(false)}
+          />
+          <div className="relative w-full max-w-md mx-4 rounded-2xl shadow-2xl bg-surface border border-border animate-[scaleIn_200ms_ease-out]">
+            <button
+              onClick={() => setExitPopupOpen(false)}
+              className="absolute top-4 right-4 p-1.5 text-muted hover:text-foreground rounded-lg transition"
+              aria-label="Close"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                <path d="M18 6L6 18" /><path d="M6 6l12 12" />
+              </svg>
+            </button>
 
-              {exitPopupStep === 'confirm_exit' ? (
-                <div className="flex flex-col items-center text-center">
-                  <h2 className="text-2xl font-bold text-foreground mb-3">Exit chat?</h2>
-                  <p className="text-muted text-base mb-10">You have unsaved changes. Are you sure you want to exit?</p>
-                  <div className="flex gap-3">
-                    <button
-                      onClick={() => setExitPopupStep(null)}
-                      className="flex items-center justify-center gap-2 py-3 px-8 bg-surface-hover hover:bg-border text-foreground font-semibold rounded-xl transition border border-border cursor-pointer"
-                    >
-                      Stay
-                    </button>
-                    <button
-                      onClick={() => setExitPopupStep('confirm_save')}
-                      className="flex items-center justify-center gap-2 py-3 px-8 bg-surface-hover hover:bg-border text-foreground font-semibold rounded-xl transition border border-border cursor-pointer"
-                    >
-                      Exit
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div className="flex flex-col items-center text-center">
-                  <h2 className="text-2xl font-bold text-foreground mb-3">Save changes?</h2>
-                  <p className="text-muted text-base mb-10">
-                    {isLocal
-                      ? 'Your changes will be saved to the project files.'
-                      : 'A pull request will be created with your changes.'}
-                  </p>
-                  <div className="flex gap-3">
-                    <button
-                      onClick={handleExitDiscard}
-                      className="flex items-center justify-center gap-2 py-3 px-8 bg-surface-hover hover:bg-border text-foreground font-semibold rounded-xl transition border border-border cursor-pointer"
-                    >
-                      Discard
-                    </button>
-                    <button
-                      onClick={handleExitSave}
-                      className="flex items-center justify-center gap-2 py-3 px-8 bg-surface-hover hover:bg-border text-foreground font-semibold rounded-xl transition border border-border cursor-pointer"
-                    >
-                      Save
-                    </button>
-                  </div>
-                </div>
-              )}
+            <div className="px-8 pt-8 pb-6">
+              <h2 className="text-xl font-bold text-foreground">Unsaved changes</h2>
+              <p className="text-muted text-sm mt-2 leading-relaxed">
+                {isLocal
+                  ? 'You have changes that haven\u2019t been saved to your project files yet.'
+                  : 'You have changes that haven\u2019t been pushed as a pull request yet.'}
+              </p>
+            </div>
+
+            <div className="px-8 pb-8 flex items-center justify-end gap-2.5">
+              <button
+                onClick={handleExitDiscard}
+                className="py-2.5 px-5 text-sm font-medium text-red-500 hover:bg-red-500/10 rounded-lg border border-red-500/30 transition"
+              >
+                Discard
+              </button>
+              <button
+                onClick={handleExitSave}
+                className="py-2.5 px-6 text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition"
+              >
+                {isLocal ? 'Save' : 'Save as PR'}
+              </button>
             </div>
           </div>
         </div>

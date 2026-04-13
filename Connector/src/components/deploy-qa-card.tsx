@@ -12,7 +12,7 @@ interface DeployQACardProps {
   onSubmitAll: (projectId: string) => void;
 }
 
-type DismissPhase = 'active' | 'dismissing' | 'heading' | 'ready';
+type DismissPhase = 'active' | 'dismissing' | 'card-out' | 'generate-in' | 'ready';
 
 export default function DeployQACard({
   projectId,
@@ -24,7 +24,7 @@ export default function DeployQACard({
   const [inputValue, setInputValue] = useState('');
   const [showCustomInput, setShowCustomInput] = useState(false);
   const [dismissPhase, setDismissPhase] = useState<DismissPhase>('active');
-  const [headingVisible, setHeadingVisible] = useState(false);
+  const [generateVisible, setGenerateVisible] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const lastQuestionRef = useRef<ClarificationQuestion | null>(null);
   const timersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
@@ -50,9 +50,9 @@ export default function DeployQACard({
   }, [showCustomInput]);
 
   useEffect(() => {
-    if (dismissPhase === 'heading') {
+    if (dismissPhase === 'generate-in') {
       const raf = requestAnimationFrame(() => {
-        requestAnimationFrame(() => setHeadingVisible(true));
+        requestAnimationFrame(() => setGenerateVisible(true));
       });
       return () => cancelAnimationFrame(raf);
     }
@@ -66,11 +66,13 @@ export default function DeployQACard({
       const totalElements = 1 + 1 + optionCount + 1;
       const stagger = 100;
       const transition = 300;
-      const dismissTime = totalElements * stagger + transition;
+      const contentDismissTime = totalElements * stagger + transition;
+      const cardOutDuration = 400;
 
-      const t1 = setTimeout(() => setDismissPhase('heading'), dismissTime);
-      const t2 = setTimeout(() => setDismissPhase('ready'), dismissTime + 600);
-      timersRef.current = [t1, t2];
+      const t1 = setTimeout(() => setDismissPhase('card-out'), contentDismissTime);
+      const t2 = setTimeout(() => setDismissPhase('generate-in'), contentDismissTime + cardOutDuration);
+      const t3 = setTimeout(() => setDismissPhase('ready'), contentDismissTime + cardOutDuration + 1100);
+      timersRef.current = [t1, t2, t3];
     }
 
     return () => timersRef.current.forEach(clearTimeout);
@@ -97,7 +99,8 @@ export default function DeployQACard({
   if (!displayQuestion && dismissPhase === 'active') return null;
 
   const options = displayQuestion?.options || [];
-  const isDismissing = dismissPhase === 'dismissing';
+  const isDismissing = dismissPhase === 'dismissing' || dismissPhase === 'card-out';
+  const isCardOut = dismissPhase === 'card-out';
 
   const stagger = 100;
   const customInputDelay = 0;
@@ -112,19 +115,26 @@ export default function DeployQACard({
     transitionDelay: isDismissing ? `${delay}ms` : '0ms',
   });
 
-  if (dismissPhase === 'heading' || dismissPhase === 'ready') {
+  if (dismissPhase === 'generate-in' || dismissPhase === 'ready') {
     return (
       <div className="flex items-center justify-center h-[calc(100vh-140px)]">
         <div
           className="w-full max-w-xl"
           style={{
-            opacity: headingVisible ? 1 : 0,
-            transform: headingVisible ? 'none' : 'translateY(8px)',
+            opacity: generateVisible ? 1 : 0,
+            transform: generateVisible ? 'none' : 'translateY(10px)',
             transition: 'opacity 400ms ease, transform 400ms ease',
           }}
         >
           <div className="bg-[#333132] dark:bg-[#C9C8C7] border border-[#444243] dark:border-[#b5b4b3] rounded-3xl overflow-hidden shadow-2xl">
-            <div className="px-14 pt-14 pb-8">
+            <div
+              className="px-14 pt-14 pb-8"
+              style={{
+                opacity: generateVisible ? 1 : 0,
+                transform: generateVisible ? 'none' : 'translateY(8px)',
+                transition: 'opacity 300ms ease 400ms, transform 300ms ease 400ms',
+              }}
+            >
               <h3 className="text-2xl font-medium text-white dark:text-black leading-relaxed text-center">
                 Questions completed, let&apos;s move on.
               </h3>
@@ -133,9 +143,9 @@ export default function DeployQACard({
             <div
               className="px-6 pb-6"
               style={{
-                opacity: headingVisible ? 1 : 0,
-                transform: headingVisible ? 'none' : 'translateY(10px)',
-                transition: 'opacity 300ms ease 300ms, transform 300ms ease 300ms',
+                opacity: generateVisible ? 1 : 0,
+                transform: generateVisible ? 'none' : 'translateY(10px)',
+                transition: 'opacity 300ms ease 700ms, transform 300ms ease 700ms',
               }}
             >
               <div className="px-8 py-6">
@@ -155,7 +165,14 @@ export default function DeployQACard({
 
   return (
     <div className="flex items-center justify-center h-[calc(100vh-140px)]">
-      <div className="w-full max-w-6xl">
+      <div
+        className="w-full max-w-6xl"
+        style={{
+          opacity: isCardOut ? 0 : 1,
+          transform: isCardOut ? 'translateY(10px)' : 'none',
+          transition: 'opacity 400ms ease, transform 400ms ease',
+        }}
+      >
         <div className="bg-[#333132] dark:bg-[#C9C8C7] border border-[#444243] dark:border-[#b5b4b3] rounded-2xl overflow-hidden shadow-2xl">
           <div className="px-14 pt-14 pb-8" style={isDismissing ? dismissStyle(questionDelay) : undefined}>
             <div className="flex items-start justify-between gap-4">

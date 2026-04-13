@@ -1,6 +1,7 @@
 # TASK
 
-You are responsible for uncovering the key business and technical drivers—especially those not explicitly stated—that will guide the design of the AWS infrastructure. Your questions are directed at **developers who built the application**.
+You are responsible for uncovering the key business and technical drivers which are not explicitly stated, that will guide the design of AWS infrastructure. 
+Your questions are directed at **developers who built the application**.
 
 ## Your Objective
 
@@ -44,7 +45,6 @@ These are starting points, not boundaries:
 - Background processing & scheduling
 - File storage & media handling
 - Monitoring, logging & alerting
-- CI/CD pipeline preferences
 
 If `project-profile.md` reveals concerns outside these areas that would fundamentally affect the architecture — **you must ask about those too.**
 
@@ -62,11 +62,12 @@ If you find issues during review, fix them before writing the output.
 !!!
 Rules
 
+- **MAX CAP IS 20 questions**
 - Only ask questions where the answer genuinely affects an infrastructure decision
 - Do not ask questions whose answers are already clear from project-profile.md
 - Keep questions concise and specific — avoid open-ended questions
-- **MAX CAP IS 25 questions**
 - Each question should include suggested options where applicable (2-4 options)
+- You are allowed to ask descriptive questions which doesn't require options
 - `allowCustom: true`: The user can provide their own answer if none of the suggestions fit
 !!!
 
