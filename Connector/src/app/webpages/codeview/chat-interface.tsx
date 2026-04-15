@@ -203,6 +203,7 @@ export default function ChatInterface({
   const { getCustomizeState, sendChatMessage, respondToDiff } = useCustomize();
   const state = getCustomizeState(projectId);
   const [input, setInput] = useState('');
+  const [autoApprove, setAutoApprove] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const messages = state.chatMessages ?? [];
@@ -210,6 +211,31 @@ export default function ChatInterface({
   const builderStatus = state.builderStatus ?? 'idle';
   const isBusy = ['preparing', 'planning', 'executing', 'building', 'build_fixing', 'saving'].includes(phase);
   const canSend = !isBusy;
+
+  // Auto-approve any pending diff when enabled
+  useEffect(() => {
+    if (!autoApprove) return;
+    for (const msg of messages) {
+      if (msg.type === 'diff' && msg.diff?.status === 'pending') {
+        respondToDiff(projectId, msg.diff.diff_id, true);
+      }
+    }
+  }, [autoApprove, messages, projectId, respondToDiff]);
+
+  // Shift+Enter activates auto-approve (only outside the textarea)
+  useEffect(() => {
+    if (autoApprove) return;
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Enter' && e.shiftKey && !(e.target instanceof HTMLTextAreaElement)) {
+        e.preventDefault();
+        setAutoApprove(true);
+      }
+    };
+
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [autoApprove]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -268,7 +294,9 @@ export default function ChatInterface({
             </>
           ) : (
             <div className="w-full space-y-5 self-start pt-0 pb-4">
-              {messages.map((msg) => {
+              {(() => {
+                const firstDiffIndex = messages.findIndex(m => m.type === 'diff');
+                return messages.map((msg, msgIndex) => {
                 if (msg.role === 'user') {
                   return (
                     <div key={msg.id} className="flex justify-end">
@@ -290,9 +318,18 @@ export default function ChatInterface({
                       {msg.diff.status === 'approved' ? 'Approved' : 'Rejected'}
                     </span>
                   );
+                  const showAutoApprovePrompt = msgIndex === firstDiffIndex && !autoApprove;
                   return (
                     <div key={msg.id} className="pl-7">
                       <DiffView diff={msg.diff} footer={footer} />
+                      {showAutoApprovePrompt && (
+                        <button
+                          onClick={() => setAutoApprove(true)}
+                          className="mt-2 w-full text-center text-base text-muted hover:text-foreground transition cursor-pointer"
+                        >
+                          Grant permission for all edits during this session? <span className="text-sm opacity-60">(Shift + Enter)</span>
+                        </button>
+                      )}
                     </div>
                   );
                 }
@@ -331,7 +368,8 @@ export default function ChatInterface({
                     </div>
                   </div>
                 );
-              })}
+              });
+              })()}
 
               {/* Builder status indicator */}
               {builderStatus !== 'idle' && (
