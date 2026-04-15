@@ -39,10 +39,10 @@ def get_github_user_identity(token: str, owner: str) -> tuple[str, str]:
 
 
 def save_local_changes(project_id: str, user_id: str) -> tuple[bool, str]:
-    """Copy updated codebase from Docker volume back to host."""
+    """Copy changed files from the ``original/`` subdirectory of the
+    Docker volume back to the host project directory."""
     host_base = os.environ.get("HOST_PROJECTS_DIR")
     if host_base:
-        check_path = os.path.join("/local-projects", user_id, project_id)
         host_path = os.path.join(host_base, user_id, project_id)
     else:
         host_path = os.path.abspath(
@@ -51,26 +51,36 @@ def save_local_changes(project_id: str, user_id: str) -> tuple[bool, str]:
                 "local-projects", user_id, project_id,
             )
         )
-        check_path = host_path
 
+    container = None
     try:
-        output = get_docker_client().containers.run(
+        container = get_docker_client().containers.run(
             "alpine",
-            command=["sh", "-c", "rm -rf /dst/* /dst/.[!.]* /dst/..?* 2>/dev/null; cp -a /src/. /dst/ && echo Success || echo Failed"],
+            command=["sh", "-c",
+                     # original/ contains only the files the agents
+                     # actually touched — no build artifacts.
+                     "cp -a /vol/original/. /dst/ 2>/dev/null; echo Success"],
             volumes={
-                CUSTOMIZE_CODE_VOLUME: {"bind": "/src", "mode": "ro"},
+                CUSTOMIZE_CODE_VOLUME: {"bind": "/vol", "mode": "ro"},
                 host_path: {"bind": "/dst", "mode": "rw"},
             },
-            remove=True,
+            detach=True,
         )
-        decoded = decode_output(output)
-        if "Success" in decoded:
+        container.wait()
+        logs = decode_output(container.logs())
+        if "Success" in logs:
             logger.info("Local changes saved for project %s", project_id)
             return (True, "Changes saved successfully")
-        return (False, f"Copy failed: {decoded}")
+        return (False, f"Copy failed: {logs}")
     except Exception as e:
         logger.error("Failed to save local changes: %s", e)
         return (False, str(e))
+    finally:
+        if container:
+            try:
+                container.remove(force=True)
+            except Exception:
+                pass
 
 
 def create_customize_pr(
@@ -91,8 +101,9 @@ def create_customize_pr(
         "cd /repo",
         f'git config user.email "{user_email}"',
         f'git config user.name "{user_name}"',
-        f"git branch -D {branch_name} 2>/dev/null || true",
-        f"git checkout -b {branch_name}",
+        # Use the existing branch if already checked out (accumulated
+        # sessions), otherwise create it fresh (first session).
+        f"git checkout {branch_name} 2>/dev/null || git checkout -b {branch_name}",
         "git add .",
         'git diff --cached --quiet && echo "NO_CHANGES" && exit 0 || true',
         'git commit -m "feat: UI customization applied by DeplAI"',
@@ -101,6 +112,7 @@ def create_customize_pr(
     ])
 
     client = get_docker_client()
+    container = None
     try:
         container = client.containers.run(
             "alpine/git",
@@ -109,9 +121,8 @@ def create_customize_pr(
             volumes={CUSTOMIZE_CODE_VOLUME: {"bind": "/repo", "mode": "rw"}},
             detach=True,
         )
-        result = container.wait(timeout=120)
+        result = container.wait()
         logs = decode_output(container.logs())
-        container.remove()
 
         if "NO_CHANGES" in logs:
             return (False, "No changes to commit", None)
@@ -122,6 +133,12 @@ def create_customize_pr(
     except Exception as e:
         logger.error("Docker error during push: %s", e)
         return (False, f"Failed to push branch: {e}", None)
+    finally:
+        if container:
+            try:
+                container.remove(force=True)
+            except Exception:
+                pass
 
     logger.info("Pushed branch %s to %s/%s", branch_name, owner, repo)
     headers = github_headers(token)

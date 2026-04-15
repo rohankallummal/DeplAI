@@ -1,15 +1,18 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/auth';
 import { CUSTOMIZE_URL, customizeHeaders } from '@/lib/customize';
 
-export async function POST() {
+export async function POST(request: NextRequest) {
   try {
     const { error } = await requireAuth();
     if (error) return error;
 
+    const body = await request.json().catch(() => ({}));
+
     const response = await fetch(`${CUSTOMIZE_URL}/api/cleanup`, {
       method: 'POST',
-      headers: customizeHeaders(),
+      headers: customizeHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(body),
     });
 
     if (!response.ok) {

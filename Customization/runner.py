@@ -43,6 +43,12 @@ class CustomizationRunner(RunnerBase):
     def changes_made(self) -> bool:
         return self._changes_made
 
+    @property
+    def _codebase_path(self) -> str:
+        if self.context.project_type == "github":
+            return "/workspace/codebase"
+        return "/workspace/codebase/edited"
+
     def cancel(self):
         super().cancel()
         if self._container:
@@ -86,6 +92,23 @@ class CustomizationRunner(RunnerBase):
                 "chmod -R a+r /app 2>/dev/null",
             ],
             user="root",
+        )
+
+        # For local projects, create a snapshot marker so _extract_changes
+        # can later find which files the agents modified.
+        if self.context.project_type == "local":
+            await asyncio.to_thread(
+                self._container.exec_run,
+                ["touch", "/workspace/codebase/.snapshot_marker"],
+                user="agent",
+            )
+
+        # Clear stale work artifacts from previous sessions (pending
+        # diffs, file backups, etc.) before starting the diff daemon.
+        await asyncio.to_thread(
+            self._container.exec_run,
+            ["sh", "-c", "rm -rf /workspace/customize/* /workspace/customize/.[!.]* 2>/dev/null || true"],
+            user="agent",
         )
 
         # Start diff daemon (eliminates ~100-300ms Python cold-start per Edit call)
@@ -148,6 +171,13 @@ class CustomizationRunner(RunnerBase):
         # Run Builder agent to verify build stability
         if self._changes_made:
             await self._run_builder()
+
+        # For local projects, copy only the files that agents actually
+        # touched into ``original/`` so the save step can skip everything
+        # else.  GitHub projects don't need this — git handles change
+        # detection and .gitignore handles build artifacts.
+        if self.context.project_type == "local":
+            await self._extract_changes()
 
         await self._send_status(StreamStatus.completed)
         await self._send_result({
@@ -339,6 +369,35 @@ class CustomizationRunner(RunnerBase):
         except Exception as e:
             logger.debug("Flush remaining edits: %s", e)
 
+    _EXTRACT_EXCLUDE_DIRS = [
+        "node_modules", ".next", "dist", "build",
+        ".cache", "__pycache__", ".venv", "venv",
+        ".turbo", ".swc", ".git",
+    ]
+
+    async def _extract_changes(self):
+        """Find source files in ``edited/`` that agents modified (newer
+        than the snapshot marker) and copy them into ``original/``.
+        Build-artifact directories are skipped."""
+        find_prunes = " -o ".join(
+            f"-name '{d}'" for d in self._EXTRACT_EXCLUDE_DIRS
+        )
+        script = (
+            "cd /workspace/codebase/edited && "
+            f"find . -mindepth 1 \\( {find_prunes} \\) -prune -o "
+            "-newer /workspace/codebase/.snapshot_marker -type f -print | "
+            "while IFS= read -r f; do "
+            "  mkdir -p \"/workspace/codebase/original/$(dirname \"$f\")\"; "
+            "  cp \"$f\" \"/workspace/codebase/original/$f\"; "
+            "done"
+        )
+        await asyncio.to_thread(
+            self._container.exec_run,
+            ["sh", "-c", script],
+            user="agent",
+        )
+        logger.info("Changed files extracted to original/")
+
     async def _run_builder(self):
         """Run the Builder agent to verify build stability after Styler changes."""
         self._check_cancelled()
@@ -368,6 +427,7 @@ class CustomizationRunner(RunnerBase):
             "--phase", phase,
             "--project-name", self.context.project_name,
             "--project-id", self.project_id,
+            "--codebase-path", self._codebase_path,
         ]
         if extra_args:
             cmd.extend(extra_args)
@@ -469,7 +529,9 @@ class CustomizationRunner(RunnerBase):
         await asyncio.to_thread(self._clear_volumes)
 
     def _copy_codebase_to_volume(self) -> tuple[bool, str]:
-        """Copy codebase from host into Docker volume."""
+        """Copy codebase from host into the ``edited/`` subdirectory of
+        the Docker volume.  An empty ``original/`` directory is created
+        alongside it to receive only the changed files later."""
         try:
             if self.context.project_type == "github":
                 return self._clone_github_repo()
@@ -491,20 +553,29 @@ class CustomizationRunner(RunnerBase):
             logger.info(f"Copying codebase from {host_path} to Docker volume")
 
             self._container.exec_run(
-                ["sh", "-c", "rm -rf /workspace/codebase/* /workspace/codebase/.[!.]* /workspace/codebase/..?* 2>/dev/null || true"],
+                ["sh", "-c",
+                 "rm -rf /workspace/codebase/* /workspace/codebase/.[!.]* /workspace/codebase/..?* 2>/dev/null || true; "
+                 "mkdir -p /workspace/codebase/edited /workspace/codebase/original"],
                 user="agent",
             )
 
-            output = get_docker_client().containers.run(
+            copy_ctr = get_docker_client().containers.run(
                 "alpine",
-                command=["sh", "-c", "cp -a /src/. /workspace/codebase/ && echo Success || echo Failed"],
+                command=["sh", "-c", "cp -a /src/. /vol/edited/ && echo Success || echo Failed"],
                 volumes={
-                    CUSTOMIZE_CODE_VOLUME: {"bind": "/workspace/codebase", "mode": "rw"},
+                    CUSTOMIZE_CODE_VOLUME: {"bind": "/vol", "mode": "rw"},
                     host_path: {"bind": "/src", "mode": "ro"},
                 },
-                remove=True,
+                detach=True,
             )
-            decoded = decode_output(output)
+            try:
+                copy_ctr.wait()
+                decoded = decode_output(copy_ctr.logs())
+            finally:
+                try:
+                    copy_ctr.remove(force=True)
+                except Exception:
+                    pass
             if "Success" in decoded:
                 logger.info("Codebase copied to Docker volume")
                 return (True, "")
@@ -513,7 +584,9 @@ class CustomizationRunner(RunnerBase):
             return (False, str(e))
 
     def _clone_github_repo(self) -> tuple[bool, str]:
-        """Clone GitHub repository into Docker volume."""
+        """Clone GitHub repository directly into the volume root.
+        If a previous customization branch exists on the remote, check
+        it out so changes accumulate across sessions."""
         try:
             token = self.context.github_token
             repo_url = self.context.repository_url
@@ -530,16 +603,36 @@ class CustomizationRunner(RunnerBase):
 
             self._container.exec_run(
                 ["sh", "-c", "rm -rf /workspace/codebase/* /workspace/codebase/.[!.]* /workspace/codebase/..?* 2>/dev/null || true"],
-                user="agent",
+                user="root",
             )
 
-            get_docker_client().containers.run(
+            branch_name = f"deplai/customize-{self.project_id}"
+
+            # Clone, then check out the existing customization branch if
+            # it exists on the remote.  If it doesn't, stay on the
+            # default branch (first session).
+            clone_script = (
+                f"git clone {clone_url} /repo && "
+                f"cd /repo && "
+                f"git fetch origin {branch_name} 2>/dev/null && "
+                f"git checkout {branch_name} 2>/dev/null || true"
+            )
+
+            clone_ctr = get_docker_client().containers.run(
                 "alpine/git",
-                command=["clone", clone_url, "/repo"],
+                entrypoint="sh",
+                command=["-c", clone_script],
                 volumes={CUSTOMIZE_CODE_VOLUME: {"bind": "/repo", "mode": "rw"}},
                 tmpfs={"/git": ""},
-                remove=True,
+                detach=True,
             )
+            try:
+                clone_ctr.wait()
+            finally:
+                try:
+                    clone_ctr.remove(force=True)
+                except Exception:
+                    pass
             logger.info("GitHub repo cloned into volume")
             return (True, "")
         except Exception as e:

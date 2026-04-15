@@ -1,5 +1,6 @@
 import logging
 import os
+import time
 
 import docker
 
@@ -19,7 +20,9 @@ _docker_client: docker.DockerClient | None = None
 def get_docker_client() -> docker.DockerClient:
     global _docker_client
     if _docker_client is None:
-        _docker_client = docker.from_env()
+        # No socket timeout — let long-running Docker operations
+        # (container.wait, large copies) finish at their own pace.
+        _docker_client = docker.from_env(timeout=None)
     return _docker_client
 
 
@@ -82,10 +85,11 @@ def get_or_create_customize_container():
 def remove_customize_container():
     try:
         container = get_docker_client().containers.get(CUSTOMIZE_CONTAINER_NAME)
-        container.stop(timeout=5)
-        container.remove()
-    except Exception:
+        container.remove(force=True)
+    except docker.errors.NotFound:
         pass
+    except Exception as e:
+        logger.warning("Failed to remove customize container: %s", e)
 
 
 def clear_customize_artifacts():
@@ -110,17 +114,40 @@ def clear_customize_artifacts():
             logger.error("Failed to clear customize artifacts: %s", e)
 
 
+def _remove_containers_using_volume(client: docker.DockerClient, vol_name: str):
+    """Force-remove any containers still referencing a volume."""
+    try:
+        for container in client.containers.list(all=True, filters={"volume": vol_name}):
+            try:
+                container.remove(force=True)
+                logger.info("Removed stale container %s holding volume %s", container.name, vol_name)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
 def cleanup_volumes() -> tuple[bool, str]:
     client = get_docker_client()
     errors = []
     for vol_name in ALL_VOLUME_NAMES:
-        try:
-            vol = client.volumes.get(vol_name)
-            vol.remove(force=True)
-        except docker.errors.NotFound:
-            pass
-        except Exception as e:
-            errors.append(f"{vol_name}: {e}")
+        _remove_containers_using_volume(client, vol_name)
+        last_err = None
+        for attempt in range(3):
+            try:
+                vol = client.volumes.get(vol_name)
+                vol.remove(force=True)
+                last_err = None
+                break
+            except docker.errors.NotFound:
+                last_err = None
+                break
+            except Exception as e:
+                last_err = e
+                if attempt < 2:
+                    time.sleep(1)
+        if last_err is not None:
+            errors.append(f"{vol_name}: {last_err}")
     if errors:
         return (False, "; ".join(errors))
     return (True, "")

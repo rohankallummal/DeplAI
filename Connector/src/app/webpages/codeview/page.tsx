@@ -56,7 +56,7 @@ function RepositoryBrowserContent() {
   const currentPath = searchParams.get('path') || '';
 
   const { showPopup } = usePopup();
-  const { startCustomize, getCustomizeState, saveChanges, discardChanges, resetCustomize } = useCustomize();
+  const { startCustomize, getCustomizeState, discardChanges, resetCustomize } = useCustomize();
   const [authLoading, setAuthLoading] = useState(true);
   const [pageReady, setPageReady] = useState(false);
   const [projectName, setProjectName] = useState('');
@@ -77,6 +77,7 @@ function RepositoryBrowserContent() {
   const [branchDropdownOpen, setBranchDropdownOpen] = useState(false);
   const [branchSearch, setBranchSearch] = useState('');
   const [exitPopupOpen, setExitPopupOpen] = useState(false);
+  const [savingProject, setSavingProject] = useState(false);
 
   usePageLoading(authLoading || !pageReady);
 
@@ -93,6 +94,13 @@ function RepositoryBrowserContent() {
   }, []);
 
   async function handleOpenChat() {
+    if (savingProject) return;
+
+    // Clear stale chat state synchronously BEFORE showing the UI so
+    // React batches both updates into a single render — prevents a
+    // brief flash of old messages.
+    resetCustomize(projectId);
+
     chatBlockingRef.current = true;
     window.history.pushState(null, '', window.location.href);
     setChatOpen(true);
@@ -138,18 +146,47 @@ function RepositoryBrowserContent() {
     setChatOpen(false);
     setExitPopupOpen(false);
     window.history.back();
-    if (isLocal) fetchContents();
-
-    // Clean up Docker volumes so next session starts fresh
-    fetch('/api/customize/cleanup', { method: 'POST' }).catch(() => {});
   }
 
-  function handleExitSave() {
-    saveChanges(projectId);
-    doExitChat();
+  async function handleExitSave() {
+    // Show loading in code view immediately
+    setSavingProject(true);
+    setFileContent(null);
+    setSelectedFile(null);
+    chatBlockingRef.current = false;
+    setChatOpen(false);
+    setExitPopupOpen(false);
+
+    // Wait for save to complete via REST — no timeout so large
+    // projects can finish copying at their own pace.
+    try {
+      const res = await fetch('/api/customize/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ project_id: projectId }),
+      });
+      const data = await res.json().catch(() => ({ success: false }));
+      if (!data.success) {
+        showPopup({ type: 'error', message: data.message || 'Failed to save changes' });
+      }
+    } catch {
+      showPopup({ type: 'error', message: 'Save failed. Original files are unchanged.' });
+    }
+
+    // Do NOT call resetCustomize or cleanup here. If the user opened a
+    // new session while the save was in-flight, wsRefs and
+    // active_customizations already belong to the new session — touching
+    // them would destroy it. The stale WS and backend state are cleaned
+    // up lazily by startCustomize/validate when the next session starts.
+    setSavingProject(false);
+    if (isLocal) await fetchContents();
+
+    // Pop the extra history entry that handleOpenChat pushed.
+    window.history.back();
   }
 
   function handleExitDiscard() {
+    // No export needed — original files are still in tmp
     discardChanges(projectId);
     doExitChat();
   }
@@ -383,9 +420,12 @@ function RepositoryBrowserContent() {
             <div className="flex items-center space-x-3">
               <button
                 onClick={() => chatOpen ? handleExitChat() : handleOpenChat()}
+                disabled={savingProject}
                 className={`p-2 rounded-lg transition ${
                   chatOpen
                     ? 'bg-[#fffafa] dark:bg-surface-hover text-foreground'
+                    : savingProject
+                    ? 'text-muted opacity-40 cursor-not-allowed'
                     : 'text-muted hover:text-foreground hover:bg-[#fffafa] dark:hover:bg-surface-hover'
                 }`}
                 title="Chat"
@@ -520,7 +560,7 @@ function RepositoryBrowserContent() {
                     Your GitHub App has been suspended.<br />
                   </p>
                 </div>
-              ) : loading && !fileContent ? (
+              ) : savingProject || (loading && !fileContent) ? (
                 <LoadingSpinner size="md" className="py-12" />
               ) : error ? (
                 <div className="text-center py-12">
@@ -653,15 +693,6 @@ function RepositoryBrowserContent() {
         </div>
       </div>
 
-      <div className="container mx-auto px-6 py-8 border-t border-border">
-        <div className="text-center">
-          <p className="text-muted text-sm mt-1">
-            {isLocal
-              ? 'Note: Files are stored temporarily, edits made to this project wont get reflected here'
-              : 'Note: Changes pushed from your IDE to GitHub will appear here after you click Refresh'}
-          </p>
-        </div>
-      </div>
       </>
       )}
 

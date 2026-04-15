@@ -3,7 +3,7 @@ import logging
 import os
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, Header, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from models import (
@@ -51,6 +51,12 @@ async def verify_api_key(x_api_key: str = Header(None)):
 
 @app.post("/api/customize/validate", response_model=CustomizeValidationResponse, dependencies=[Depends(verify_api_key)])
 async def validate_customize(request: CustomizeValidationRequest):
+    # Clean up any stale runner from a previous session for this project
+    # so that a leftover cleanup call can't race with the new session.
+    old_runner = active_customizations.pop(request.project_id, None)
+    if old_runner:
+        old_runner.cancel()
+
     customize_contexts[request.project_id] = request
     logger.info("Customize context stored for project %s (%s)", request.project_id, request.project_name)
     return CustomizeValidationResponse(success=True, message="Customize context stored")
@@ -65,6 +71,10 @@ async def websocket_customize(websocket: WebSocket, project_id: str, token: str 
     await websocket.accept()
     logger.info("WebSocket connected for project %s", project_id)
 
+    # Track the runner owned by THIS connection so the disconnect
+    # handler only detaches its own runner, not a newer session's.
+    local_runner: CustomizationRunner | None = None
+
     try:
         while True:
             raw = await websocket.receive_text()
@@ -75,6 +85,7 @@ async def websocket_customize(websocket: WebSocket, project_id: str, token: str 
                 if runner and runner.status in ACTIVE_STATUSES:
                     logger.info("Reattaching to active customization for %s", project_id)
                     await runner.attach(websocket)
+                    local_runner = runner
                     continue
 
                 context = customize_contexts.get(project_id)
@@ -84,6 +95,7 @@ async def websocket_customize(websocket: WebSocket, project_id: str, token: str 
 
                 runner = CustomizationRunner(websocket, project_id, context)
                 active_customizations[project_id] = runner
+                local_runner = runner
 
                 async def run_workflow(r: CustomizationRunner, pid: str):
                     global _last_project_id
@@ -98,12 +110,12 @@ async def websocket_customize(websocket: WebSocket, project_id: str, token: str 
                 asyncio.create_task(run_workflow(runner, project_id))
 
             elif cmd.action == "chat":
-                runner = active_customizations.get(project_id)
+                runner = local_runner or active_customizations.get(project_id)
                 if runner and cmd.data:
                     await runner.receive_chat_message(cmd.data.get("message", ""))
 
             elif cmd.action == "diff_response":
-                runner = active_customizations.get(project_id)
+                runner = local_runner or active_customizations.get(project_id)
                 if runner and cmd.data:
                     await runner.receive_diff_response(
                         cmd.data.get("diff_id", ""),
@@ -111,20 +123,19 @@ async def websocket_customize(websocket: WebSocket, project_id: str, token: str 
                     )
 
             elif cmd.action == "save":
-                runner = active_customizations.get(project_id)
+                runner = local_runner or active_customizations.get(project_id)
                 if runner:
                     await runner.save_changes()
 
             elif cmd.action == "discard":
-                runner = active_customizations.get(project_id)
+                runner = local_runner or active_customizations.get(project_id)
                 if runner:
                     await runner.discard_changes()
 
     except (WebSocketDisconnect, RuntimeError):
         logger.info("WebSocket disconnected for project %s", project_id)
-        runner = active_customizations.get(project_id)
-        if runner:
-            runner.detach()
+        if local_runner:
+            local_runner.detach()
     except Exception as e:
         logger.error("WebSocket error for project %s: %s", project_id, e, exc_info=True)
 
@@ -141,10 +152,46 @@ async def get_status(project_id: str):
     return {"active": False, "phase": None, "changes_made": False}
 
 
+@app.post("/api/customize/save/{project_id}", dependencies=[Depends(verify_api_key)])
+async def save_project(project_id: str):
+    runner = active_customizations.get(project_id)
+    if not runner:
+        return {"success": False, "message": "No active customization"}
+    # Detach from WS so _send_status/_try_send become no-ops and
+    # can't hang on a half-closed connection.
+    runner.detach()
+    return await runner.save_changes()
+
+
 @app.post("/api/cleanup", dependencies=[Depends(verify_api_key)])
-async def cleanup():
+async def cleanup(request: Request):
+    global _last_project_id
+
+    body: dict = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+
+    project_id = body.get("project_id")
+
+    if project_id:
+        # Per-project cleanup: only clear in-memory state.
+        # Docker container and volumes are intentionally kept alive —
+        # they are reused by the next session and refreshed by
+        # _copy_codebase_to_volume / validate.
+        runner = active_customizations.pop(project_id, None)
+        if runner:
+            runner.cancel()
+        customize_contexts.pop(project_id, None)
+        return {"success": True, "message": "Session cleanup completed"}
+
+    # Full cleanup (no project_id): tear down everything.
     for runner in active_customizations.values():
         runner.cancel()
+    customize_contexts.clear()
+    active_customizations.clear()
+    _last_project_id = None
 
     await asyncio.to_thread(remove_customize_container)
 
@@ -152,10 +199,7 @@ async def cleanup():
     if not success:
         return {"success": False, "message": f"Cleanup failed: {error_msg}"}
 
-    customize_contexts.clear()
-    active_customizations.clear()
-
-    return {"success": True, "message": "Docker volumes removed successfully"}
+    return {"success": True, "message": "Full cleanup completed"}
 
 
 @app.get("/health")

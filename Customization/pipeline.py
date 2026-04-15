@@ -14,11 +14,11 @@ def _emit_result(success: bool, phase: str, **extra):
     print(json.dumps({"type": "result", "data": data}), flush=True)
 
 
-async def run_execute(project_name: str, project_id: str, user_request: str):
+async def run_execute(project_name: str, project_id: str, user_request: str, codebase_path: str):
     from agent.styler import run
 
     _on_message("phase", "Executing changes")
-    result = await run("/workspace/codebase", user_request)
+    result = await run(codebase_path, user_request)
 
     if result.success:
         _on_message("success", "All changes executed")
@@ -31,11 +31,11 @@ async def run_execute(project_name: str, project_id: str, user_request: str):
     )
 
 
-async def run_build(project_name: str, project_id: str):
+async def run_build(project_name: str, project_id: str, codebase_path: str):
     from agent.builder import run
 
     _on_message("phase", "Running build verification")
-    result = await run("/workspace/codebase")
+    result = await run(codebase_path)
 
     if result.success:
         _on_message("success", "Build passed")
@@ -45,8 +45,8 @@ async def run_build(project_name: str, project_id: str):
 
 
 PHASE_RUNNERS = {
-    "execute": lambda args: run_execute(args.project_name, args.project_id, args.user_request),
-    "build": lambda args: run_build(args.project_name, args.project_id),
+    "execute": lambda args: run_execute(args.project_name, args.project_id, args.user_request, args.codebase_path),
+    "build": lambda args: run_build(args.project_name, args.project_id, args.codebase_path),
 }
 
 
@@ -55,6 +55,7 @@ if __name__ == "__main__":
     parser.add_argument("--phase", required=True, choices=["execute", "build"])
     parser.add_argument("--project-name", required=True)
     parser.add_argument("--project-id", required=True)
+    parser.add_argument("--codebase-path", required=True)
     parser.add_argument("--user-request", required=False, default="")
     args = parser.parse_args()
 

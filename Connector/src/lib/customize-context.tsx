@@ -42,6 +42,7 @@ interface ProjectCustomizeState {
   changesMade: boolean;
   currentDiff: DiffPreview | null;
   builderStatus: BuilderStatus;
+  saveResult: { success: boolean; message: string; url?: string } | null;
 }
 
 interface CustomizeContextValue {
@@ -71,6 +72,7 @@ const DEFAULT_STATE: ProjectCustomizeState = {
   changesMade: false,
   currentDiff: null,
   builderStatus: 'idle',
+  saveResult: null,
 };
 
 function genId(): string {
@@ -201,6 +203,13 @@ export function CustomizeProvider({ children }: { children: React.ReactNode }) {
         }
 
         case 'save_result': {
+          setStates(prev => ({
+            ...prev,
+            [projectId]: {
+              ...getOrDefault(prev, projectId),
+              saveResult: data.data,
+            },
+          }));
           addChatMessage(projectId, {
             role: 'agent',
             type: 'save_result',

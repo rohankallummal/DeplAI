@@ -33,7 +33,7 @@ function DiffLineRow({ line }: { line: DiffLine }) {
 
 function HunkSeparator() {
   return (
-    <div className="flex items-center bg-[#fff8e7] dark:bg-[#1a1a2e] border-y border-border">
+    <div className="flex items-center">
       <span className="w-10 text-right px-1.5 text-indigo-500 select-none text-[11px] shrink-0">···</span>
     </div>
   );
@@ -44,7 +44,7 @@ function DiffView({ diff, footer }: { diff: DiffPreview; footer?: React.ReactNod
   const allLines = hunks.flatMap(h => h.lines);
   const added = allLines.filter(l => l.type === 'add').length;
   const removed = allLines.filter(l => l.type === 'del').length;
-  const displayPath = diff.file_path.replace(/^\/workspace\/codebase\//, '');
+  const displayPath = diff.file_path.replace(/^\/workspace\/codebase\/(edited\/)?/, '');
 
   return (
     <div className="my-2 rounded-xl overflow-hidden border border-border bg-white dark:bg-[#161616]">
@@ -249,7 +249,7 @@ export default function ChatInterface({
       </div>
 
       {/* Chat area */}
-      <div className="flex-1 overflow-y-auto px-6 pt-0">
+      <div className="flex-1 overflow-y-auto px-6 pt-0 scrollbar-hidden">
         <div className={`flex flex-col items-center max-w-3xl mx-auto ${messages.length === 0 ? 'justify-center h-full pb-40' : 'justify-start pt-4'}`}>
           {messages.length === 0 ? (
             <>
