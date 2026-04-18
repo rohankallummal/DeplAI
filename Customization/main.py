@@ -51,8 +51,6 @@ async def verify_api_key(x_api_key: str = Header(None)):
 
 @app.post("/api/customize/validate", response_model=CustomizeValidationResponse, dependencies=[Depends(verify_api_key)])
 async def validate_customize(request: CustomizeValidationRequest):
-    # Clean up any stale runner from a previous session for this project
-    # so that a leftover cleanup call can't race with the new session.
     old_runner = active_customizations.pop(request.project_id, None)
     if old_runner:
         old_runner.cancel()
@@ -71,8 +69,6 @@ async def websocket_customize(websocket: WebSocket, project_id: str, token: str 
     await websocket.accept()
     logger.info("WebSocket connected for project %s", project_id)
 
-    # Track the runner owned by THIS connection so the disconnect
-    # handler only detaches its own runner, not a newer session's.
     local_runner: CustomizationRunner | None = None
 
     try:
@@ -157,8 +153,6 @@ async def save_project(project_id: str):
     runner = active_customizations.get(project_id)
     if not runner:
         return {"success": False, "message": "No active customization"}
-    # Detach from WS so _send_status/_try_send become no-ops and
-    # can't hang on a half-closed connection.
     runner.detach()
     return await runner.save_changes()
 
@@ -176,17 +170,12 @@ async def cleanup(request: Request):
     project_id = body.get("project_id")
 
     if project_id:
-        # Per-project cleanup: only clear in-memory state.
-        # Docker container and volumes are intentionally kept alive —
-        # they are reused by the next session and refreshed by
-        # _copy_codebase_to_volume / validate.
         runner = active_customizations.pop(project_id, None)
         if runner:
             runner.cancel()
         customize_contexts.pop(project_id, None)
         return {"success": True, "message": "Session cleanup completed"}
 
-    # Full cleanup (no project_id): tear down everything.
     for runner in active_customizations.values():
         runner.cancel()
     customize_contexts.clear()

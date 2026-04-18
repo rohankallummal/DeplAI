@@ -24,7 +24,6 @@ export default function Home() {
 
       if (session.isLoggedIn) {
         setNavigating(true);
-        // Wait two animation frames so the overlay is painted before navigating
         await new Promise<void>(r => requestAnimationFrame(() => requestAnimationFrame(() => r())));
         router.replace('/webpages');
         return;

@@ -93,7 +93,7 @@ def clear_deploy_artifacts() -> None:
         container = client.containers.get(DEPLOY_CONTAINER_NAME)
         if container.status == "running":
             container.exec_run(
-                ["sh", "-c", "rm -rf /workspace/deploy/* /workspace/deploy/.[!.]* /workspace/deploy/..?*"],
+                ["sh", "-c", "find /workspace/deploy -mindepth 1 -maxdepth 1 ! -name 'AWS Infra' -exec rm -rf {} + 2>/dev/null || true"],
             )
             return
     except Exception:
@@ -102,7 +102,7 @@ def clear_deploy_artifacts() -> None:
     try:
         client.containers.run(
             "alpine",
-            command=["sh", "-c", "rm -rf /vol/* /vol/.[!.]* /vol/..?*"],
+            command=["sh", "-c", "find /vol -mindepth 1 -maxdepth 1 ! -name 'AWS Infra' -exec rm -rf {} + 2>/dev/null || true"],
             volumes={DEPLOY_VOLUME: {"bind": "/vol", "mode": "rw"}},
             remove=True,
         )
@@ -129,7 +129,6 @@ def cleanup_volumes() -> tuple[bool, str]:
 
 
 def run_terraform_command(tf_command: list[str], aws_env: dict, tf_log: str | None = None) -> tuple[int, str]:
-    """Run a terraform command inside the deploy-agent container. Returns (exit_code, output)."""
     try:
         container = get_or_create_deploy_container()
 

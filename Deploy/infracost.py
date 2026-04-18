@@ -36,7 +36,6 @@ class CostEstimate:
 
 
 def _ensure_image(client: docker.DockerClient):
-    """Pull the infracost Docker image if not already present."""
     try:
         client.images.get(INFRACOST_IMAGE)
     except docker.errors.ImageNotFound:
@@ -45,7 +44,6 @@ def _ensure_image(client: docker.DockerClient):
 
 
 def _run_infracost(command: list[str]) -> bytes:
-    """Run infracost via Docker with the Deploy volume mounted. Returns stdout."""
     api_key = os.environ.get("INFRACOST_API_KEY")
     if not api_key:
         raise ValueError("INFRACOST_API_KEY not configured")
@@ -63,7 +61,6 @@ def _run_infracost(command: list[str]) -> bytes:
 
 
 def estimate_cost() -> CostEstimate:
-    """Run infracost breakdown via Docker and return parsed cost data."""
     try:
         logger.info("Running infracost breakdown via Docker (%s)", INFRACOST_IMAGE)
         _run_infracost([
@@ -93,7 +90,6 @@ def estimate_cost() -> CostEstimate:
 
 
 def get_cost_table() -> str:
-    """Run infracost breakdown with table format via Docker."""
     try:
         logger.info("Running infracost table via Docker")
         output = _run_infracost([
@@ -112,7 +108,6 @@ def get_cost_table() -> str:
 
 
 def _collect_components(resource_data: dict) -> list[dict]:
-    """Recursively collect cost components from a resource and its subresources."""
     components = []
 
     for cost_comp in resource_data.get("costComponents", []):
@@ -133,7 +128,6 @@ def _collect_components(resource_data: dict) -> list[dict]:
 
 
 def _parse_infracost_output(data: dict) -> CostEstimate:
-    """Parse infracost JSON v0.2 output into CostEstimate."""
     try:
         total_monthly_cost = float(data.get("totalMonthlyCost", 0) or 0)
         total_hourly_cost = float(data.get("totalHourlyCost", 0) or 0)
@@ -183,7 +177,6 @@ def _parse_infracost_output(data: dict) -> CostEstimate:
 
 
 def cost_estimate_to_dict(estimate: CostEstimate) -> dict:
-    """Convert CostEstimate to JSON-serializable dict."""
     return {
         "total_monthly_cost": estimate.total_monthly_cost,
         "total_hourly_cost": estimate.total_hourly_cost,

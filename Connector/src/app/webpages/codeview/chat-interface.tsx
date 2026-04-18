@@ -10,7 +10,6 @@ function getGreeting(): string {
   return 'Evening';
 }
 
-/* ── Diff View ─────────────────────────────────────────────────── */
 
 function DiffLineRow({ line }: { line: DiffLine }) {
   const prefix = line.type === 'add' ? '+' : line.type === 'del' ? '-' : ' ';
@@ -48,7 +47,6 @@ function DiffView({ diff, footer }: { diff: DiffPreview; footer?: React.ReactNod
 
   return (
     <div className="my-2 rounded-xl overflow-hidden border border-border bg-white dark:bg-[#161616]">
-      {/* File header */}
       <div className="flex items-center justify-between px-3.5 py-2.5 bg-[#f0ead6] dark:bg-[#1c1c1c] border-b border-border">
         <span className="text-xs font-semibold font-mono text-black dark:text-[#e2e8f0] truncate mr-3">{displayPath}</span>
         <div className="flex gap-2.5 text-[11px] font-mono shrink-0">
@@ -56,7 +54,6 @@ function DiffView({ diff, footer }: { diff: DiffPreview; footer?: React.ReactNod
           <span className="text-red-400">-{removed}</span>
         </div>
       </div>
-      {/* Scrollable hunk container */}
       <div className="max-h-96 overflow-auto text-xs leading-[21px] font-mono scrollbar-hidden">
         {hunks.map((hunk, hunkIdx) => (
           <div key={hunkIdx}>
@@ -67,7 +64,6 @@ function DiffView({ diff, footer }: { diff: DiffPreview; footer?: React.ReactNod
           </div>
         ))}
       </div>
-      {/* Footer */}
       {footer && (
         <div className="flex items-center justify-end gap-1.5 px-2.5 py-1 bg-[#f0ead6] dark:bg-[#1c1c1c] border-t border-border">
           {footer}
@@ -77,7 +73,6 @@ function DiffView({ diff, footer }: { diff: DiffPreview; footer?: React.ReactNod
   );
 }
 
-/* ── Approval Buttons ──────────────────────────────────────────── */
 
 function ApprovalButtons({ onApprove, onReject }: { onApprove: () => void; onReject: () => void }) {
   return (
@@ -104,7 +99,6 @@ function ApprovalButtons({ onApprove, onReject }: { onApprove: () => void; onRej
   );
 }
 
-/* ── Thinking Dots ─────────────────────────────────────────────── */
 
 function ThinkingDots({ label = 'Thinking' }: { label?: string }) {
   const [dots, setDots] = useState('');
@@ -115,7 +109,6 @@ function ThinkingDots({ label = 'Thinking' }: { label?: string }) {
   return <span className="text-blue-400">{label}{dots}</span>;
 }
 
-/* ── Builder Status ────────────────────────────────────────────── */
 
 function BuilderStatusIndicator({ status }: { status: BuilderStatus }) {
   if (status === 'idle') return null;
@@ -136,7 +129,6 @@ function BuilderStatusIndicator({ status }: { status: BuilderStatus }) {
   );
 }
 
-/* ── Chat Input ────────────────────────────────────────────────── */
 
 function ChatInput({ input, onChange, onKeyDown, onSend, canSend }: {
   input: string;
@@ -189,7 +181,6 @@ function ChatInput({ input, onChange, onKeyDown, onSend, canSend }: {
   );
 }
 
-/* ── Main Chat Interface ───────────────────────────────────────── */
 
 export default function ChatInterface({
   username,
@@ -212,7 +203,6 @@ export default function ChatInterface({
   const isBusy = ['preparing', 'planning', 'executing', 'building', 'build_fixing', 'saving'].includes(phase);
   const canSend = !isBusy;
 
-  // Auto-approve any pending diff when enabled
   useEffect(() => {
     if (!autoApprove) return;
     for (const msg of messages) {
@@ -222,7 +212,6 @@ export default function ChatInterface({
     }
   }, [autoApprove, messages, projectId, respondToDiff]);
 
-  // Shift+Enter activates auto-approve (only outside the textarea)
   useEffect(() => {
     if (autoApprove) return;
 
@@ -260,7 +249,6 @@ export default function ChatInterface({
 
   return (
     <div className="fixed inset-0 z-50 bg-header flex flex-col">
-      {/* Header with exit button and status */}
       <div className="flex items-center justify-end p-4">
         <button
           onClick={onExit}
@@ -274,7 +262,6 @@ export default function ChatInterface({
         </button>
       </div>
 
-      {/* Chat area */}
       <div className="flex-1 overflow-y-auto px-6 pt-0 scrollbar-hidden">
         <div className={`flex flex-col items-center max-w-3xl mx-auto ${messages.length === 0 ? 'justify-center h-full pb-40' : 'justify-start pt-4'}`}>
           {messages.length === 0 ? (
@@ -358,7 +345,6 @@ export default function ChatInterface({
                   );
                 }
 
-                // Default text message from agent
                 return (
                   <div key={msg.id} className="flex justify-start">
                     <div className="pl-7">
@@ -371,12 +357,10 @@ export default function ChatInterface({
               });
               })()}
 
-              {/* Builder status indicator */}
               {builderStatus !== 'idle' && (
                 <BuilderStatusIndicator status={builderStatus} />
               )}
 
-              {/* Thinking indicator (not shown during builder phases — BuilderStatusIndicator handles those) */}
               {(phase === 'preparing' || phase === 'executing' || phase === 'saving') && (
                 <div className="pl-7">
                   <ThinkingDots label={phase === 'preparing' ? 'Gathering codebase context' : 'Thinking'} />
@@ -389,7 +373,6 @@ export default function ChatInterface({
         </div>
       </div>
 
-      {/* Input pinned to bottom when messages exist */}
       {messages.length > 0 && (
         <div className="px-6 pb-6 pt-2 max-w-3xl mx-auto w-full">
           <ChatInput

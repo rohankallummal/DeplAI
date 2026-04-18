@@ -16,7 +16,7 @@ export async function getAuthenticatedUser() {
 }
 
 export async function requireAuth(): Promise<
-  { user: SessionData['user'] & {}; error?: never } | { user?: never; error: NextResponse }
+  { user: NonNullable<SessionData['user']>; error?: never } | { user?: never; error: NextResponse }
 > {
   const user = await getAuthenticatedUser();
   if (!user) {

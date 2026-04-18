@@ -81,7 +81,6 @@ function RepositoryBrowserContent() {
 
   usePageLoading(authLoading || !pageReady);
 
-  // Block browser back/forward only while chat is open
   useEffect(() => {
     const handlePopstate = () => {
       if (chatBlockingRef.current) {
@@ -96,16 +95,12 @@ function RepositoryBrowserContent() {
   async function handleOpenChat() {
     if (savingProject) return;
 
-    // Clear stale chat state synchronously BEFORE showing the UI so
-    // React batches both updates into a single render — prevents a
-    // brief flash of old messages.
     resetCustomize(projectId);
 
     chatBlockingRef.current = true;
     window.history.pushState(null, '', window.location.href);
     setChatOpen(true);
 
-    // Validate and start customization session
     try {
       const body: Record<string, any> = {
         project_id: projectId,
@@ -125,7 +120,7 @@ function RepositoryBrowserContent() {
         body: JSON.stringify(body),
       });
 
-      await startCustomize(projectId, projectName || repo || 'Project', projectType);
+      await startCustomize(projectId, projectName || repo || 'Project');
     } catch (err) {
       console.error('Failed to start customization:', err);
     }
@@ -149,7 +144,6 @@ function RepositoryBrowserContent() {
   }
 
   async function handleExitSave() {
-    // Show loading in code view immediately
     setSavingProject(true);
     setFileContent(null);
     setSelectedFile(null);
@@ -157,8 +151,6 @@ function RepositoryBrowserContent() {
     setChatOpen(false);
     setExitPopupOpen(false);
 
-    // Wait for save to complete via REST — no timeout so large
-    // projects can finish copying at their own pace.
     try {
       const res = await fetch('/api/customize/save', {
         method: 'POST',
@@ -173,20 +165,13 @@ function RepositoryBrowserContent() {
       showPopup({ type: 'error', message: 'Save failed. Original files are unchanged.' });
     }
 
-    // Do NOT call resetCustomize or cleanup here. If the user opened a
-    // new session while the save was in-flight, wsRefs and
-    // active_customizations already belong to the new session — touching
-    // them would destroy it. The stale WS and backend state are cleaned
-    // up lazily by startCustomize/validate when the next session starts.
     setSavingProject(false);
     if (isLocal) await fetchContents();
 
-    // Pop the extra history entry that handleOpenChat pushed.
     window.history.back();
   }
 
   function handleExitDiscard() {
-    // No export needed — original files are still in tmp
     discardChanges(projectId);
     doExitChat();
   }
@@ -508,7 +493,7 @@ function RepositoryBrowserContent() {
                           />
                         </div>
                       </div>
-                      <div className="max-h-52 overflow-y-auto">
+                      <div className="max-h-52 overflow-y-auto scrollbar-hidden">
                         {branches
                           .filter(b => b.toLowerCase().includes(branchSearch.toLowerCase()))
                           .map(b => (
@@ -547,7 +532,7 @@ function RepositoryBrowserContent() {
       <div className="container mx-auto px-6 py-8">
         <div className={`grid gap-6 ${fileContent ? 'lg:grid-cols-2' : 'lg:grid-cols-1'}`}>
           <div className="bg-surface rounded-xl border border-border">
-            <div className="p-6 max-h-[600px] overflow-y-auto">
+            <div className="p-6 max-h-[600px] overflow-y-auto scrollbar-hidden">
               {!isLocal && isSuspended ? (
                 <div className="text-center py-16">
                   <div className="w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 bg-orange-100 dark:bg-orange-700">
@@ -673,7 +658,7 @@ function RepositoryBrowserContent() {
               </div>
 
               <div className="p-6">
-                <div className="rounded-lg overflow-hidden">
+                <div className="rounded-lg overflow-hidden scrollbar-hidden">
                   <SyntaxHighlighter
                     language={getLanguageFromFilename(selectedFile || '')}
                     style={vscDarkPlus}
@@ -682,6 +667,7 @@ function RepositoryBrowserContent() {
                       margin: 0,
                       maxHeight: '600px',
                       fontSize: '14px',
+                      scrollbarWidth: 'none',
                     }}
                   >
                     {fileContent}
@@ -696,7 +682,6 @@ function RepositoryBrowserContent() {
       </>
       )}
 
-      {/* Exit confirmation popup */}
       {exitPopupOpen && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center animate-[fadeIn_150ms_ease-out]">
           <div

@@ -61,7 +61,6 @@ export async function extractZipToProject(
   fs.mkdirSync(projectPath, { recursive: true });
 
   try {
-
     const zip = new AdmZip(zipBuffer);
     const zipEntries = zip.getEntries();
 

@@ -1,4 +1,5 @@
 import logging
+import subprocess
 from pathlib import Path
 from dataclasses import dataclass, field
 
@@ -21,12 +22,36 @@ class TerraformResult:
 
 
 def _discover_tf_files(tf_dir: Path) -> list[str]:
-    """Return all .tf filenames in the directory."""
     return [f.name for f in tf_dir.glob("*.tf") if f.is_file()]
 
 
+def _verify_applied_state(tf_dir: Path) -> str | None:
+    try:
+        proc = subprocess.run(
+            ["terraform", "state", "list"],
+            cwd=str(tf_dir),
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except Exception as e:
+        return f"Unable to run `terraform state list` to verify apply: {e}"
+
+    if proc.returncode != 0:
+        return f"`terraform state list` failed (exit {proc.returncode}): {proc.stderr.strip()[:300]}"
+
+    resources = [line for line in proc.stdout.splitlines() if line.strip()]
+    if not resources:
+        return (
+            "Terraform apply reported success but `terraform state list` is empty — "
+            "no resources were actually provisioned in AWS. "
+            "Check AWS credentials, region, and apply logs."
+        )
+    logger.info("Terraform apply provisioned %d resources", len(resources))
+    return None
+
+
 def _validate_plan_file(tf_dir: Path) -> str | None:
-    """Return an error message if the plan file is missing or corrupt, else None."""
     plan_file = tf_dir / "terraform.plan"
     if not plan_file.exists():
         return "Plan file not created — plan likely failed"
@@ -39,19 +64,21 @@ async def run(deploy_path: str, state_key: str, phase: str = "plan") -> Terrafor
     tf_dir = Path(deploy_path) / "terraform" / "code"
     tf_dir.mkdir(parents=True, exist_ok=True)
 
+    cache_dir = "/workspace/deploy/AWS Infra"
+
     if phase == "plan":
         prompt = (
             f"Read the repository context at {deploy_path}/project-profile.md "
             f"and the Question-Answer pairs at {deploy_path}/QnA.json.\n\n"
-            f"Generation production ready Terraform code where the plan succeeds. \n "
+            f"Generation production ready Terraform code. \n "
             f"write Terraform files to {tf_dir}/. "
             f"The state key for S3 backend is: {state_key}\n"
+            f"Documentation directory: {cache_dir}\n"
         )
     elif phase == "apply":
         prompt = (
             f"The Terraform plan has been approved. "
             f"Apply {tf_dir}/terraform.plan and save outputs to {tf_dir}/outputs.json. "
-            f"State key: {state_key}\n"
         )
     else:
         return TerraformResult(success=False, error=f"Unknown phase: {phase}")
@@ -59,9 +86,9 @@ async def run(deploy_path: str, state_key: str, phase: str = "plan") -> Terrafor
     options = ClaudeAgentOptions(
         model="opus",
         allowed_tools=[
-            "Read", "Write", "Bash",
-            "WebSearch", "WebFetch",
-            "mcp__terraform",
+            "Read", "Write", "Bash", "Agent",
+            "Grep", "Glob",
+            "mcp__firecrawl",
         ],
         permission_mode="bypassPermissions",
         cwd=str(tf_dir),
@@ -84,6 +111,7 @@ async def run(deploy_path: str, state_key: str, phase: str = "plan") -> Terrafor
                     success=False,
                     files_created=created,
                     error=f"Missing required files: {missing_required}",
+
                 )
 
             plan_error = _validate_plan_file(tf_dir)
@@ -92,6 +120,7 @@ async def run(deploy_path: str, state_key: str, phase: str = "plan") -> Terrafor
                     success=False,
                     files_created=created,
                     error=plan_error,
+
                 )
 
             logger.info(
@@ -106,6 +135,13 @@ async def run(deploy_path: str, state_key: str, phase: str = "plan") -> Terrafor
                 return TerraformResult(
                     success=False,
                     error="outputs.json not created — apply likely failed",
+                )
+
+            state_error = _verify_applied_state(tf_dir)
+            if state_error:
+                return TerraformResult(
+                    success=False,
+                    error=state_error,
                 )
 
             created = _discover_tf_files(tf_dir)

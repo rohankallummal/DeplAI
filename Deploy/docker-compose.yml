@@ -15,18 +15,6 @@ services:
       - ${HOST_PROJECTS_DIR}:/local-projects:ro
     networks:
       - deplai
-    depends_on:
-      - terraform-mcp
-    restart: unless-stopped
-
-  terraform-mcp:
-    image: hashicorp/terraform-mcp-server
-    command: ["streamable-http", "--transport-host", "0.0.0.0", "--transport-port", "8080"]
-    environment:
-      - TFE_TOKEN=${TFE_TOKEN}
-      - TFE_ADDRESS=${TFE_ADDRESS}
-    networks:
-      - deplai
     restart: unless-stopped
 
 networks:

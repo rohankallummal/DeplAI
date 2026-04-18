@@ -97,8 +97,6 @@ export default function SecurityAnalysisPage() {
     }
   }
 
-  const handleFindingsReady = setFindingsReady;
-
   const handleCleanScan = useCallback(() => {
     setActivePopup('clean');
   }, []);
@@ -206,7 +204,7 @@ export default function SecurityAnalysisPage() {
       <div className="flex-1 flex flex-col min-h-0 relative">
         <div className={`flex-1 min-h-0 flex flex-col container mx-auto px-6 py-4 transition-all duration-200 ${popupActive && !monitorOpen ? 'blur-md pointer-events-none select-none' : ''}`}>
           <div className="flex-1 min-h-0">
-            <Findings projectId={projectId} remediating={remediating} remediationDone={remediationDone} onCleanScan={handleCleanScan} onFindingsReady={handleFindingsReady} onLoaded={() => setFindingsLoaded(true)} />
+            <Findings projectId={projectId} remediating={remediating} onCleanScan={handleCleanScan} onFindingsReady={setFindingsReady} onLoaded={() => setFindingsLoaded(true)} />
           </div>
         </div>
 

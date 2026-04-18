@@ -1,10 +1,11 @@
 'use client';
 
 import { createContext, useContext, useState, useRef, useCallback, useMemo } from 'react';
+import { fetchWsToken } from './ws-token';
 
 const WS_BASE_URL = process.env.NEXT_PUBLIC_DEPLOY_WS_URL || 'ws://localhost:8001';
 
-export type DeployPhase = 'idle' | 'analyzing' | 'clarifying' | 'terraforming' | 'costing' | 'completed' | 'cancelled' | 'error';
+export type DeployPhase = 'idle' | 'analyzing' | 'clarifying' | 'terraforming' | 'costing' | 'deploying' | 'completed' | 'cancelled' | 'error';
 
 export interface DeployMessage {
   index: number;
@@ -95,29 +96,19 @@ const DEFAULT_STATE: ProjectDeployState = {
   costData: null,
 };
 
-async function fetchWsToken(): Promise<string> {
-  try {
-    const res = await fetch('/api/deploy/ws-token');
-    if (!res.ok) return '';
-    const data = await res.json();
-    return data.token || '';
-  } catch {
-    return '';
-  }
-}
-
 const STATUS_MAP: Record<string, DeployPhase> = {
   running: 'analyzing',
   analyzing: 'analyzing',
   clarifying: 'clarifying',
   terraforming: 'terraforming',
   costing: 'costing',
+  deploying: 'deploying',
   completed: 'completed',
   cancelled: 'cancelled',
   error: 'error',
 };
 
-const ACTIVE_PHASES: DeployPhase[] = ['analyzing', 'clarifying', 'terraforming', 'costing'];
+const ACTIVE_PHASES: DeployPhase[] = ['analyzing', 'clarifying', 'terraforming', 'costing', 'deploying'];
 
 export function DeployProvider({ children }: { children: React.ReactNode }) {
   const [states, setStates] = useState<Record<string, ProjectDeployState>>({});
@@ -210,7 +201,7 @@ export function DeployProvider({ children }: { children: React.ReactNode }) {
   }
 
   async function connectDeployWsWithToken(projectId: string): Promise<WebSocket> {
-    const wsToken = await fetchWsToken();
+    const wsToken = await fetchWsToken('deploy');
     const base = `${WS_BASE_URL}/ws/deploy/${projectId}`;
     const ws = new WebSocket(wsToken ? `${base}?token=${encodeURIComponent(wsToken)}` : base);
 

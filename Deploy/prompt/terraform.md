@@ -1,149 +1,100 @@
 # TASK
 
-Your objective is to:
-
-1. **Read the repository context** from `project-profile.md` and the **Question-Answer pairs** from `QnA.json`
-2. **Design the deployment architecture** internally by reasoning through the inputs
-3. **Generate production-ready Terraform** that provisions the AWS infrastructure
+Your objective is to generate production-ready Terraform to provision and deploy AWS infrastructure in the cloud.
 
 ---
 
 # External Tool Availability
 
-You have direct access to the Terraform CLI via Bash.
+You have direct access to:
+- **Terraform CLI** via Bash
+- **AWS CLI v2** via Bash (pre-authenticated)
+- **Firecrawl MCP** 
 
 ---
 
-# Knowledge Sources
+# A Practical Framework for Writing Accurate Terraform Code
 
-## Terraform Registry (AWS)
-- **Provides:** AWS resource schemas, arguments, attributes, and data sources
-- **Access:** Use the MCP server (registry tools for provider documentation and module lookups)
+Producing reliable Terraform requires three complementary components.
+Each answers a different question, and none is sufficient on its own.
 
-## Terraform Modules (AWS)
-- **Provides:** Community and verified module search and inspection
-- **Access:** Use the MCP server (registry tools for module search)
+1. The Terraform AWS Provider Registry defines the structure of a resource. It tells you which arguments and attributes exist, and how a resource or data source is organized.
 
-## Terraform Language
-- **Provides:** HCL syntax including blocks, expressions, functions, and meta-arguments
-- **Access:** Web search → https://developer.hashicorp.com/terraform/language
+2. The AWS documentation explains what values are valid for those arguments in general.
 
-## Terraform CLI Commands
-- **Provides:** Correct and up-to-date CLI command usage
-- **Access:** Web search → https://developer.hashicorp.com/terraform/cli/commands
+3. The AWS CLI shows what is actually available in the target account and region at the moment. It allows you to verify existing resources ensuring that the values you choose are usable in practice.
 
-## Terraform Debugging
-- **Provides:** Debug logs and troubleshooting guidance
-- **Access:** Web search → https://developer.hashicorp.com/terraform/internals/debugging
+Used together, these three components eliminate guesswork and help ensure that your Terraform configurations are valid, deployable, and up to date.
 
-## Terraform CLI Usage & Verification Guidelines
-Before using any Terraform CLI command, always verify usage by:
 
-- Running: `terraform <command> -help`, or
-- Searching: https://developer.hashicorp.com/terraform/cli/commands
+## Whitelisted Sources (STRICT)
 
----
+You must retrieve information **only** from the following Web sources:
 
-# Strictly Follow
+1. **Primary**
+- `https://registry.terraform.io/providers/hashicorp/aws/latest/docs` (Terraform AWS Provider Registry)
+- `https://docs.aws.amazon.com/` (AWS documentation)
 
-You MUST use the knowledge sources while reasoning and generating Terraform code. Do not rely on assumptions when accurate references are available.
+2. **Secondary**
+- `https://developer.hashicorp.com/terraform` (HashiCorp Terraform Documentation)
+This source is intended to support you whenever you encounter something in Terraform that you don’t fully understand.
+
+### Method of Access
+
+Use the `firecrawl_crawl` tool to retrieve and navigate content from these sources.
 
 ---
 
-# Before You Write Any Code
+# WORKFLOW
 
-Read both `project-profile.md` and `QnA.json` completely before generating any Terraform.
+## Phase 1: Research & Analysis
 
-Before writing code, reason through the architecture:
+This phase must be completed in full before any Terraform code is generated.
 
-For each QnA:
-- What infrastructure requirement does it imply?
-- What decisions are explicitly defined?
-- What remains ambiguous or unspecified?
+### Step 1: Requirement Analysis
 
-For key findings in the project profile:
-- What AWS services and resources are required to support them?
+Begin by reviewing the repository context in `project-profile.md` and the question–answer pairs in `QnA.json`
 
-For any gaps or missing details:
-- Infer sensible defaults based on best practices and context (do not leave critical decisions undefined)
+Identify:
 
-the code must reflect these decisions
+- The infrastructure requirements implied by each question and corresponding answer
+- The explicit decisions that have already been defined  
 
-## Security Baseline
+### Step 2: Source Exploration & Documentation
+
+Based on insights from the previous step, crawl through the **Entire** primary source 
+- Determine which AWS services and resources are required
+- For every AWS resource, service, or module you choose to use to generate Terraform, extract the relevant documentation and write it to the knowledge store
+
+At the same time, these design choices are validated against the actual state of the target AWS account using read-only AWS CLI queries.
+
+#### Knowledge Store
+
+A persistent knowledge store is available at `/workspace/deploy/AWS Infra/`.
+Phase 2 reads from it while authoring Terraform.
+
+1. Naming Convention:
+   ```
+   <resource_name>.md
+   ```
+2. Reference that stored content while authoring the Terraform for that resource.
+
+
+## Phase 2 — Generate code
  
-These are non-negotiable regardless of what the inputs say:
+### File layout (required)
+- `provider.tf` — AWS provider, version constraint, region from variable, default tags
+- `backend.tf` — S3 backend with placeholder config (values via `-backend-config`)
+- `variables.tf` — every configurable value with `type`, `description`, `default`, `validation`; sensitive vars marked `sensitive = true`
+- `outputs.tf` — downstream values (endpoints, ARNs, IDs) with descriptions; never expose secrets
+- `locals.tf` — `local.project_prefix`, `local.common_tags`
+Split remaining resources into files by logical layer (`network.tf`,`compute.tf`, `data.tf`, `iam.tf`, etc.). No monolithic `main.tf`.
  
-- **IAM:** Least-privilege roles and policies for every component. No `*` actions or resources unless absolutely unavoidable (justify in a comment)
-- **Encryption:** At rest for all data stores (KMS or service-managed). In transit via TLS everywhere
-- **Network isolation:** Databases and caches in private subnets only, no public IPs. Security groups as primary access control
-- **Secrets:** All sensitive values via SSM Parameter Store or Secrets Manager — never in Terraform variable defaults, never in outputs
- 
----
+## Phase 3: Execution
 
-# Phase 3: Code Generation
+Once the Terraform configuration files are generated, the workflow moves into execution.
 
-## Module vs Raw HCL Decision
-
-For EACH infrastructure component, decide module vs raw HCL:
-
-**Step 1** — Count resources. How many AWS resources does this component need?
-
-**Step 2** — If it has multiple interconnected resources, search for a module on the registry.
-
-**Step 3** — Validate the module:
-- Published by `terraform-aws-modules`
-- Significant community adoption
-- Updated within last 12 months
-- Supports your AWS provider version
-
-If any check fails → raw HCL.
-
-**Step 4** — Check module inputs/outputs match your needs. If not → raw HCL.
-
-Every module call or resource block MUST have a comment explaining the choice. Pin module versions with `~>`.
-
-## File Organization
-
-All files go in the Terraform code directory. Organize by logical grouping — not a single monolithic `main.tf`.
-
-**Required files:**
-- **`provider.tf`** — AWS provider with version constraint, region from variable, default tags
-- **`backend.tf`** — S3 backend with placeholder config (values passed via `-backend-config` at init)
-- **`variables.tf`** — Every configurable value, with type, description, default, validation. Sensitive vars marked `sensitive = true`
-- **`outputs.tf`** — Downstream values (endpoints, ARNs, IDs) with descriptions
-- **`locals.tf`** — Shared naming conventions (`local.project_prefix`) and common tags (`local.common_tags`)
-
-**Split resources by layer** — create separate files based on what the infrastructure requires. 
-
-## Coding Standards
-
-- **Naming:** All resources use `local.project_prefix`
-- **Tagging:** Every taggable resource gets `local.common_tags` merged with resource-specific tags
-- **Sensitive data:** Never hardcode secrets. Use variables with `sensitive = true` or SSM/Secrets Manager. Never expose secrets in outputs
-- **Comments:** Explain WHY, not WHAT. Every resource or module block should reference the architecture decision it implements
-- **Circular dependencies:** Break with `depends_on` or restructure. Never leave implicit circular refs
-- **Security groups:** Default deny. Explicitly open only required ports between specific components
-- **Encryption:** Enable at-rest encryption on every data store. Use TLS for every connection
-- **IAM:** Scope policies to specific resources and actions. No wildcards unless documented and justified
-
----
-
-# Phase 4: CLI Execution & Error Recovery Loop
-
-After generating .tf files, execute the Terraform CLI cycle. If any step fails, diagnose, fix, and retry — up to 3 attempts per step.
-
-```
-STEP        COMMAND                   ON FAILURE
-────        ───────                   ──────────
-  1         terraform fmt             → Read error, fix formatting, retry
-  2         terraform validate        → Parse error, fix config, retry
-  3         terraform init            → Check provider, backend config; enable DEBUG logging if opaque
-  4         terraform plan            → Follow Plan Failure Process below
-  5         terraform apply           → Follow Apply Failure Process below
-  6         terraform output -json    → Save outputs
-```
-
-## Init Command
+The process begins with initialization
 
 ```bash
 terraform init \
@@ -153,17 +104,17 @@ terraform init \
   -backend-config="encrypt=true"
 ```
 
-The state key is provided in your task prompt. Environment variables are available at runtime.
+The state key will be provided to you. Environment variables are available at runtime.
 
-## Plan Command
+Next `terraform fmt` ensures consistent formatting, followed by `terraform validate` to detect syntax or structural issues. 
+- Any errors must be resolved before continuing.
 
+The process then proceeds to executing the plan command
 ```bash
 terraform plan -out=terraform.plan
 ```
-
-Stop after a successful plan during the plan phase. The runner handles cost estimation and user confirmation before the apply phase.
-
-## Apply Command
+Stop after a successful plan. Wait for user confirmation before proceeding.
+Once approved, the plan is applied:
 
 ```bash
 terraform apply -auto-approve terraform.plan
@@ -176,83 +127,20 @@ terraform output -json > outputs.json
 
 ---
 
-# Plan Failure Process
+# Handling Failures
 
-When `terraform plan` fails:
+## Failures from external tools
 
-1. **Parse the error output.** look at:
-   - File + line number
-   - Resource address
-   - Error type
+- If Firecrawl MCP is unavailable after multiple retries, **terminate the process immediately**. Do not proceed without access, as it is critical for accurate Terraform generation.
 
-2. **Look up docs.** Check the knowledge store or fetch from approved sources.
+- If there is any confusion about how to use the AWS or Terraform CLI, refer to the documentation listed under `Whitelisted Sources`.
 
-3. **Fix the specific error** in the .tf file. Add a `# FIX:` comment explaining what changed and why.
+## Failure in Terraform Plan or Apply
 
-4. **Re-run** `terraform fmt` → `terraform validate` → `terraform plan`.
+When a failure occurs during the plan phase, the error output is analyzed to determine the root cause, whether it stems from syntax errors, invalid arguments, or unsupported resource attributes. The configuration is then corrected, often by consulting the relevant Terraform or provider documentation, and the plan is re-run until it succeeds.
 
-5. If a new error appears, repeat from step 1.
+Failures during the apply phase require more careful handling, since Terraform may have already provisioned some resources before the error occurred. In this scenario, the current infrastructure state is reviewed to understand what was successfully created and what remains outstanding. The root cause is then addressed in the configuration, and the apply is re-executed, allowing Terraform to reconcile the actual state with the desired state incrementally.
 
-6. If you cannot fix it after 3 attempts, report the full diagnostics and stop.
+In both cases, the process follows an iterative cycle: diagnose the error, update the configuration, and re-run the relevant command. 
 
----
-
-# Apply Failure & Partial State Process
-
-Apply failures can leave infrastructure in a **partial state** — some resources created, others failed.
-
-1. **Parse the apply output.** Identify which resources succeeded and which failed.
-
-2. **Check current state:**
-   ```bash
-   terraform state list
-   ```
-   Compare against the intended plan to identify the gap.
-
-3. **Fix the failing resource** based on the error. Do NOT modify resources already in state — they are real infrastructure.
-
-4. **Re-plan and re-apply:**
-   ```bash
-   terraform plan -out=terraform.plan
-   terraform apply -auto-approve terraform.plan
-   ```
-   The re-plan should show only the failed resource(s) as changes.
-
-5. After successful apply, save outputs:
-   ```bash
-   terraform output -json > outputs.json
-   ```
-
-6. If you cannot fix it after 3 attempts, report the full diagnostics and stop.
-
----
-
-# Debug Logging
-
-When error messages are insufficient, enable Terraform debug logging:
-
-```bash
-TF_LOG=DEBUG terraform <command>
-```
-
-Use `TRACE` for maximum verbosity. Capture the output, diagnose, then run the command again normally.
-
----
-
-# Fix Rules
-
-1. **Surgical changes only.** Fix the specific error, not surrounding code.
-2. **Preserve architectural intent.** Don't change instance types, counts, or design decisions unless the error demands it.
-3. **Every change must be doc-verified.** Never guess at argument names or values.
-4. **Document every fix** with a `# FIX:` comment.
-5. **Never delete or rename resources already in state** — that breaks real infrastructure.
-
----
-
-# Environment Variables (available at runtime)
-
-- `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`
-- `AWS_DEFAULT_REGION`
-- `TF_S3_BUCKET`
-
-You do NOT hardcode these. They are injected into your environment.
+If the issue persists after 3 attempts, **terminate the process**.

@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Cost Breakdown</title>
+<style>
+  @page {
+    size: A4;
+    margin: 18mm 16mm 18mm 16mm;
+    @bottom-right {
+      content: "Page " counter(page);
+      font-family: "Noto Sans", sans-serif;
+      font-size: 8pt;
+      color: #94a3b8;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+    }
+    @bottom-left {
+      content: "DeplAI";
+      font-family: "Noto Sans", sans-serif;
+      font-size: 8pt;
+      color: #94a3b8;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html, body {
+    font-family: "Noto Sans", sans-serif;
+    color: #1e293b;
+    font-size: 9.5pt;
+    line-height: 1.45;
+    margin: 0;
+    padding: 0;
+  }
+
+  .kicker {
+    font-size: 8pt;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: #64748b;
+  }
+  .label {
+    font-size: 8pt;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: #64748b;
+  }
+  .tab { font-variant-numeric: tabular-nums; }
+  .muted { color: #64748b; }
+
+  /* Masthead */
+  .masthead { padding-bottom: 14pt; margin-bottom: 18pt; }
+  .masthead .title {
+    font-size: 26pt;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    line-height: 1.05;
+    color: #0f172a;
+  }
+  .masthead .meta {
+    margin-top: 8pt;
+    font-size: 8pt;
+    color: #64748b;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+  }
+
+  .frame {
+    border: 0.6pt solid #cbd5e1;
+    padding: 16pt 20pt;
+  }
+
+  .section + .section {
+    border-top: 0.6pt solid #cbd5e1;
+    margin: 16pt -20pt 0;
+    padding: 16pt 20pt 0;
+  }
+
+  /* Section heading */
+  .sec-head { margin-bottom: 10pt; }
+  .sec-head h3 { font-size: 14pt; margin: 4pt 0 0 0; font-weight: 600; color: #0f172a; }
+
+  /* Resource card */
+  .resource {
+    page-break-inside: avoid;
+    padding: 10pt 20pt;
+    margin: 0 -20pt;
+    border-bottom: 0.3pt solid #e2e8f0;
+  }
+  .resource:last-child { border-bottom: none; }
+  .resource-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 12pt;
+  }
+  .resource-head .name {
+    font-size: 10pt;
+    font-weight: 600;
+    color: #0f172a;
+    word-break: break-all;
+  }
+  .resource-head .type {
+    font-size: 7.5pt;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #64748b;
+    margin-top: 2pt;
+  }
+  .resource-head .cost {
+    text-align: right;
+    min-width: 110pt;
+  }
+  .resource-head .cost .m {
+    font-size: 11pt;
+    font-weight: 600;
+    color: #0f172a;
+  }
+  .resource-head .cost .h {
+    font-size: 7.5pt;
+    color: #64748b;
+    letter-spacing: 0.1em;
+    margin-top: 2pt;
+  }
+
+  .tags {
+    font-size: 7.5pt;
+    color: #64748b;
+    margin-top: 4pt;
+    line-height: 1.6;
+  }
+  .tag {
+    display: inline-block;
+    border: 0.4pt solid #cbd5e1;
+    padding: 0 4pt;
+    margin-right: 3pt;
+    letter-spacing: 0.06em;
+  }
+
+  /* Component table */
+  table.comp {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 8.5pt;
+    margin-top: 6pt;
+  }
+  table.comp thead th {
+    font-size: 7pt;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: #64748b;
+    font-weight: 500;
+    text-align: left;
+    padding: 3pt 4pt;
+    border-bottom: 0.4pt solid #cbd5e1;
+  }
+  table.comp thead th.num { text-align: right; }
+  table.comp tbody td {
+    padding: 3pt 4pt;
+    border-bottom: 0.2pt solid #e2e8f0;
+    vertical-align: top;
+  }
+  table.comp tbody tr:last-child td { border-bottom: none; }
+  table.comp tbody td.num {
+    text-align: right;
+    color: #0f172a;
+    font-variant-numeric: tabular-nums;
+  }
+  table.comp tbody td.name {
+    color: #1e293b;
+    word-break: break-word;
+  }
+  table.comp tbody td.unit { color: #64748b; }
+
+  /* Sub-resources */
+  .subres {
+    margin-top: 8pt;
+    padding-left: 10pt;
+    border-left: 1.4pt solid #e2e8f0;
+  }
+  .subres .sub-head {
+    font-size: 8.5pt;
+    color: #475569;
+    display: flex;
+    justify-content: space-between;
+    margin-top: 6pt;
+  }
+  .subres .sub-head .sub-name { font-weight: 600; }
+
+  /* Summary */
+  .summary { display: flex; gap: 14pt; }
+  .summary .tile { flex: 1; }
+  .summary .tile .label { display: block; margin-bottom: 4pt; }
+  .summary .tile .value {
+    font-size: 26pt;
+    line-height: 1;
+    color: #0f172a;
+    font-weight: 600;
+  }
+  .summary .tile.warn .label { color: #b45309; }
+  .summary .tile.warn .value { color: #92400e; }
+
+  /* Type counts list */
+  table.types {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 8pt;
+    font-size: 9pt;
+  }
+  table.types th, table.types td {
+    padding: 4pt 6pt;
+    border-bottom: 0.3pt solid #e2e8f0;
+    text-align: left;
+  }
+  table.types th {
+    font-size: 7pt;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: #64748b;
+    font-weight: 500;
+  }
+  table.types td.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+  .footnote {
+    margin-top: 14pt;
+    font-size: 8pt;
+    color: #94a3b8;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+</style>
+</head>
+<body>
+
+{% macro render_components(components) -%}
+  {% if components %}
+  <table class="comp">
+    <thead>
+      <tr>
+        <th>Component</th>
+        <th>Unit</th>
+        <th class="num">Monthly Qty</th>
+        <th class="num">Unit Price</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for c in components %}
+      <tr>
+        <td class="name">{{ c.name }}</td>
+        <td class="unit">{{ c.unit or '—' }}</td>
+        <td class="num">{{ c.monthly_quantity | fmt_qty }}</td>
+        <td class="num">
+          {% if c.price_not_applicable %}N/A{% else %}${{ c.price | fmt_unit_price }}{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+{%- endmacro %}
+
+{% macro render_subresource(r) -%}
+  <div class="subres">
+    <div class="sub-head">
+      <span>
+        <span class="sub-name">{{ r.name }}</span>
+        {% if r.resource_type %}<span class="muted">· {{ r.resource_type }}</span>{% endif %}
+      </span>
+    </div>
+    {{ render_components(r.components) }}
+    {% for s in r.subresources %}{{ render_subresource(s) }}{% endfor %}
+  </div>
+{%- endmacro %}
+
+<div class="masthead">
+  <div class="title">Cost Breakdown</div>
+  <div class="meta">Project · {{ project_name }}</div>
+</div>
+
+<div class="frame">
+
+  {% for p in projects %}
+  <div class="section">
+    <div class="sec-head">
+      <div class="kicker">Line items</div>
+      <h3>Detailed ledger</h3>
+    </div>
+
+    {% if p.resources %}
+      {% for r in p.resources %}
+      <div class="resource">
+        <div class="resource-head">
+          <div style="flex:1;min-width:0;">
+            <div class="name">{{ r.name }}</div>
+            {% if r.resource_type %}<div class="type">{{ r.resource_type }}</div>{% endif %}
+          </div>
+          <div class="cost">
+            <div class="m tab">${{ r.monthly_cost | fmt_money }} <span class="muted" style="font-size:7.5pt;letter-spacing:0.12em;">/MO</span></div>
+            <div class="h tab">${{ r.hourly_cost | fmt_money(4) }} / hr</div>
+          </div>
+        </div>
+
+        {% if r.tags %}
+        <div class="tags">
+          {% for k, v in r.tags.items() %}
+            <span class="tag">{{ k }}={{ v }}</span>
+          {% endfor %}
+        </div>
+        {% endif %}
+
+        {{ render_components(r.components) }}
+
+        {% for s in r.subresources %}{{ render_subresource(s) }}{% endfor %}
+      </div>
+      {% endfor %}
+    {% else %}
+      <p class="muted" style="font-size:9pt;">No priced resources in this project.</p>
+    {% endif %}
+  </div>
+  {% endfor %}
+
+  {% if summary and summary.total_resources > 0 %}
+  <div class="section">
+    <div class="sec-head">
+      <div class="kicker">Coverage</div>
+      <h3>Summary</h3>
+    </div>
+    <div class="summary">
+      <div class="tile">
+        <span class="label">Total</span>
+        <div class="value tab">{{ '%02d' % summary.total_resources }}</div>
+      </div>
+      <div class="tile">
+        <span class="label">Estimated</span>
+        <div class="value tab">{{ '%02d' % summary.estimated_resources }}</div>
+      </div>
+      <div class="tile">
+        <span class="label">Free tier</span>
+        <div class="value tab">{{ '%02d' % summary.free_resources }}</div>
+      </div>
+      <div class="tile">
+        <span class="label">Usage-based</span>
+        <div class="value tab">{{ '%02d' % summary.usage_based_resources }}</div>
+      </div>
+      <div class="tile {% if summary.unsupported_resources > 0 %}warn{% endif %}">
+        <span class="label">Unsupported</span>
+        <div class="value tab">{{ '%02d' % summary.unsupported_resources }}</div>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if unsupported %}
+  <div class="section">
+    <div class="sec-head">
+      <div class="kicker">Not priced</div>
+      <h3>Unsupported resource types</h3>
+    </div>
+    <table class="types">
+      <thead>
+        <tr><th>Type</th><th class="num">Count</th></tr>
+      </thead>
+      <tbody>
+        {% for t in unsupported %}
+        <tr><td>{{ t.type }}</td><td class="num">{{ t.count }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+</div>
+
+<div class="footnote">
+  This estimate was calculated based on the generated Terraform code using Infracost.
+</div>
+
+</body>
+</html>

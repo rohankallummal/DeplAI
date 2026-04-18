@@ -1,6 +1,7 @@
 'use client';
 
 import { createContext, useContext, useState, useRef, useCallback, useMemo } from 'react';
+import { fetchWsToken } from './ws-token';
 
 const WS_BASE_URL = process.env.NEXT_PUBLIC_SECURITY_WS_URL || 'ws://localhost:8000';
 
@@ -63,17 +64,6 @@ export function useScan() {
     throw new Error('useScan must be used within a ScanProvider');
   }
   return context;
-}
-
-async function fetchWsToken(): Promise<string> {
-  try {
-    const res = await fetch('/api/scan/ws-token');
-    if (!res.ok) return '';
-    const data = await res.json();
-    return data.token || '';
-  } catch {
-    return '';
-  }
 }
 
 function connectWebSocket(
@@ -182,7 +172,7 @@ export function ScanProvider({ children }: { children: React.ReactNode }) {
       return next;
     });
 
-    const wsToken = await fetchWsToken();
+    const wsToken = await fetchWsToken('scan');
     scan.wsRefs.current[projectId] = connectWebSocket(
       '/ws/scan', projectId,
       scan.appendMessage,
@@ -216,7 +206,7 @@ export function ScanProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    const wsToken = await fetchWsToken();
+    const wsToken = await fetchWsToken('scan');
     remediation.wsRefs.current[projectId] = connectWebSocket(
       '/ws/remediate', projectId,
       remediation.appendMessage,
@@ -256,7 +246,7 @@ export function ScanProvider({ children }: { children: React.ReactNode }) {
       onResult?: (projectId: string, result: RemediationResult) => void,
     ) {
       op.setStates(prev => ({ ...prev, [projectId]: initialState }));
-      const wsToken = await fetchWsToken();
+      const wsToken = await fetchWsToken('scan');
       op.wsRefs.current[projectId] = connectWebSocket(
         wsPath, projectId,
         op.appendMessage, op.updateStatus,

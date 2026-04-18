@@ -1,6 +1,10 @@
-# TASK
+# Task
 
-Traverse the repository given to you and generate a comprehensive **project-profile.md** document that maps out the project's deployment specifications.
+Traverse the given repository and analyze its contents, structure, and configuration related to deployment.
+
+# Objective
+
+Generate a comprehensive `project-profile.md` document that clearly outlines all deployment specifications required to successfully deploy the project to AWS.
 
 ## What You Must Find
 
@@ -55,10 +59,10 @@ Extract: full list of expected environment variables with any comments or defaul
 #### **CRITICAL**: Never include actual secret values in the output. Record only the variable name, its purpose, and the file path where it was found. If a file contains real credentials, note the variable name and mark the value as [REDACTED].
 
 
-### 8. Build, Test & CI/CD
+### 8. Build, Test
 Identify how the project is built, tested, and deployed.
 
-Common sources: `Makefile`, `Rakefile`, `Taskfile.yml`, `justfile`, `turbo.json`, `nx.json`, `lerna.json`, `moon.yml`, build scripts in `scripts/` or `bin/`, `package.json` scripts section, `.github/workflows/`, `.gitlab-ci.yml`, `Jenkinsfile`, `.circleci/config.yml`, `bitbucket-pipelines.yml`, `azure-pipelines.yml`, and any CI/CD configuration.
+Common sources: `Makefile`, `Rakefile`, `Taskfile.yml`, `justfile`, `turbo.json`, `nx.json`, `lerna.json`, `moon.yml`, build scripts in `scripts/` or `bin/`, `package.json` scripts section, `.github/workflows/`, `.gitlab-ci.yml`, `Jenkinsfile`, `.circleci/config.yml`, `bitbucket-pipelines.yml`, `azure-pipelines.yml`.
 
 Extract: build commands, test commands, deployment steps, pipeline stages, monorepo tooling.
 
@@ -96,10 +100,6 @@ Write the project-profile.md file with the following structure. **Include a sect
 # Repository Context Analysis
 
 ## Project Overview
-- **Primary Language(s):**
-- **Framework(s):**
-- **Runtime Version(s):**
-- **Project Type:** (monorepo / single app / microservices)
 
 ## Project Directory Structure
 
@@ -121,11 +121,8 @@ Write the project-profile.md file with the following structure. **Include a sect
 
 ## Data Flow
 ### Ingress Points
-
 ### Processing & Transformation
-
 ### Storage Operations
-
 ### Egress Points
 
 ## Control Flow
@@ -134,16 +131,13 @@ Write the project-profile.md file with the following structure. **Include a sect
 ### Background Processing
 ### Auth Flow
 
-
 ## Environment Configuration
 ### Required Environment Variables
 ### Secrets Management
 
-## Build & CI/CD
-
+## Build
 
 ## Frontend
-
 
 ## Networking & Operations
 ### Ports & Exposure

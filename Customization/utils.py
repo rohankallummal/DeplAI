@@ -20,8 +20,6 @@ _docker_client: docker.DockerClient | None = None
 def get_docker_client() -> docker.DockerClient:
     global _docker_client
     if _docker_client is None:
-        # No socket timeout — let long-running Docker operations
-        # (container.wait, large copies) finish at their own pace.
         _docker_client = docker.from_env(timeout=None)
     return _docker_client
 
@@ -115,7 +113,6 @@ def clear_customize_artifacts():
 
 
 def _remove_containers_using_volume(client: docker.DockerClient, vol_name: str):
-    """Force-remove any containers still referencing a volume."""
     try:
         for container in client.containers.list(all=True, filters={"volume": vol_name}):
             try:

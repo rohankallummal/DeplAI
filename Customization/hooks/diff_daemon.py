@@ -1,14 +1,4 @@
 #!/usr/bin/env python3
-"""
-Long-running daemon for Edit tool interception.
-Listens on a Unix socket and handles diff accumulation in memory,
-eliminating Python interpreter cold-start (~100-300ms) on every Edit call.
-
-Protocol (all messages are JSON):
-  Hook  -> daemon: {"tool_input": {"file_path":..., "old_string":..., "new_string":...}}
-  Flush -> daemon: {"action": "get_state"}   returns accumulated hunks then resets
-  Reset -> daemon: {"action": "reset"}        clears all state
-"""
 
 import json
 import os
@@ -24,15 +14,12 @@ SOCK_PATH = os.path.join(BASE, "hook.sock")
 PENDING = os.path.join(BASE, "pending_diff.json")
 RESPONSE = os.path.join(BASE, "diff_response.json")
 FILE_BACKUP = os.path.join(BASE, "file_backup")
-TIMEOUT = 300  # seconds to wait for user approval
-CONTEXT = 3  # lines of context around changes
+TIMEOUT = 300
+CONTEXT = 3
 
-# ── in-memory state (replaces file-based accumulator) ────────────
 _current_file: str = ""
 _accumulated_hunks: list = []
 
-
-# ── hunk helpers ─────────────────────────────────────────────────
 
 def build_hunk(fp: str, old_s: str, new_s: str) -> dict:
     lines: list = []
@@ -93,11 +80,7 @@ def merge_overlapping_hunks(hunks: list) -> list:
     return merged
 
 
-# ── file-based IPC with runner (cross-container boundary) ────────
-
 def send_and_wait(fp: str, hunks: list) -> bool:
-    """Write pending diff for the runner, poll for user response.
-    Returns True if approved.  Blocks up to TIMEOUT seconds."""
     hunks = merge_overlapping_hunks(sorted(hunks, key=hunk_sort_key))
 
     for f in (PENDING, RESPONSE):
@@ -139,8 +122,6 @@ def send_and_wait(fp: str, hunks: list) -> bool:
     return False
 
 
-# ── core edit handler ────────────────────────────────────────────
-
 def handle_edit(data: dict) -> None:
     global _current_file, _accumulated_hunks
 
@@ -149,7 +130,6 @@ def handle_edit(data: dict) -> None:
     old_string = tool_input.get("old_string", "")
     new_string = tool_input.get("new_string", "")
 
-    # File transition — send accumulated hunks for the *previous* file
     if _current_file and _current_file != file_path:
         if _accumulated_hunks:
             approved = send_and_wait(_current_file, _accumulated_hunks)
@@ -160,7 +140,6 @@ def handle_edit(data: dict) -> None:
                     pass
         _accumulated_hunks = []
 
-    # Starting a new file — take a backup
     if _current_file != file_path:
         try:
             shutil.copy2(file_path, FILE_BACKUP)
@@ -168,13 +147,11 @@ def handle_edit(data: dict) -> None:
             pass
         _current_file = file_path
 
-    # Build hunk and accumulate
     hunk = build_hunk(file_path, old_string, new_string)
     _accumulated_hunks.append(hunk)
 
 
 def handle_get_state() -> dict:
-    """Return accumulated state for the runner's final flush, then reset."""
     global _current_file, _accumulated_hunks
     state = {
         "current_file": _current_file,
@@ -186,13 +163,10 @@ def handle_get_state() -> dict:
 
 
 def handle_reset() -> None:
-    """Clear all in-memory state."""
     global _current_file, _accumulated_hunks
     _current_file = ""
     _accumulated_hunks = []
 
-
-# ── socket server ────────────────────────────────────────────────
 
 def run_server() -> None:
     os.makedirs(BASE, exist_ok=True)

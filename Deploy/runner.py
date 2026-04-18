@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 import logging
 import os
@@ -19,6 +20,7 @@ from infracost import estimate_cost, cost_estimate_to_dict, get_cost_table
 logger = logging.getLogger(__name__)
 
 TOTAL_STEPS = 10
+MCP_HEARTBEAT_INTERVAL = 120.0
 
 
 class DeployRunner(RunnerBase):
@@ -33,9 +35,12 @@ class DeployRunner(RunnerBase):
         self._deploy_confirmed_event = asyncio.Event()
         self._deploy_confirmed = False
         self._user_cancelled = False
+        self._mcp_heartbeat_task: asyncio.Task | None = None
 
     def cancel(self):
         super().cancel()
+        if self._mcp_heartbeat_task and not self._mcp_heartbeat_task.done():
+            self._mcp_heartbeat_task.cancel()
         if self._container:
             try:
                 self._container.exec_run(
@@ -75,6 +80,23 @@ class DeployRunner(RunnerBase):
             user="root",
         )
 
+        firecrawl_key = os.environ.get("FIRECRAWL_API_KEY", "")
+        if firecrawl_key:
+            mcp_settings = {
+                "ackTos": True,
+                "mcpServers": {
+                    "firecrawl": {"url": f"https://mcp.firecrawl.dev/{firecrawl_key}/v2/mcp"}
+                },
+            }
+        else:
+            mcp_settings = {"ackTos": True}
+        settings_b64 = base64.b64encode(json.dumps(mcp_settings).encode()).decode()
+        await asyncio.to_thread(
+            self._container.exec_run,
+            ["sh", "-c", f"echo {settings_b64} | base64 -d > /home/agent/.claude/settings.json"],
+            user="root",
+        )
+
         exit_code, diag_output = await asyncio.to_thread(
             self._container.exec_run,
             ["claude", "--version"],
@@ -96,12 +118,21 @@ class DeployRunner(RunnerBase):
             return await self._terminate(f"Terraform CLI check failed (exit {exit_code}): {tf_text}")
         logger.info(f"Terraform CLI ready ({tf_text.splitlines()[0]})")
 
-        # Check MCP server connectivity (Section 5.6)
         mcp_ok = await self._check_mcp_connectivity()
         if not mcp_ok:
-            logger.warning("Terraform MCP server not reachable — registry tools will be unavailable")
+            return await self._terminate(
+                "Firecrawl MCP is unavailable — required for accurate Terraform generation. "
+                "Aborting before analyze."
+            )
 
-        # Phase 1: Repository Analysis (Agent 1)
+        self._mcp_heartbeat_task = asyncio.create_task(self._heartbeat_mcp())
+        try:
+            return await self._run_phases()
+        finally:
+            if self._mcp_heartbeat_task and not self._mcp_heartbeat_task.done():
+                self._mcp_heartbeat_task.cancel()
+
+    async def _run_phases(self) -> bool:
         await self._send_status(StreamStatus.analyzing)
         logger.info("Starting repository analysis")
 
@@ -112,7 +143,6 @@ class DeployRunner(RunnerBase):
 
         self._check_cancelled()
 
-        # Phase 2: Generate Clarification Questions (Agent 2 - Phase 1)
         logger.info("Preparing clarification questions")
 
         clarify_result = await self._run_agent_phase("clarify")
@@ -137,7 +167,6 @@ class DeployRunner(RunnerBase):
             environment={"HOME": "/home/agent"},
         )
 
-        # Phase 3: Terraform — Generate + Plan
         await self._send_status(StreamStatus.terraforming)
         logger.info("Starting Terraform generation and planning")
 
@@ -169,7 +198,6 @@ class DeployRunner(RunnerBase):
 
         cost_table = await asyncio.to_thread(get_cost_table)
         cost_data["table"] = cost_table
-        logger.info("Infracost table output:\n%s", cost_table)
 
         await self._try_send({
             "type": "cost_estimate",
@@ -187,8 +215,8 @@ class DeployRunner(RunnerBase):
             await asyncio.to_thread(self._clear_volumes)
             return False
 
-        # Phase 4: Terraform Apply
         logger.info("User confirmed, starting Terraform apply")
+        await self._send_status(StreamStatus.deploying)
 
         apply_result = await self._run_agent_phase(
             "terraform_apply",
@@ -203,22 +231,52 @@ class DeployRunner(RunnerBase):
 
         return True
 
+    async def _heartbeat_mcp(self, interval: float = MCP_HEARTBEAT_INTERVAL):
+        try:
+            while not self._cancelled:
+                await asyncio.sleep(interval)
+                if self._cancelled:
+                    return
+                ok = await self._check_mcp_connectivity()
+                if ok:
+                    logger.debug("Firecrawl MCP heartbeat ok")
+                else:
+                    logger.warning(
+                        "Firecrawl MCP heartbeat failed — Terraform agent will surface the error "
+                        "via its own retry/terminate logic"
+                    )
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error("MCP heartbeat crashed: %s", e, exc_info=True)
+
     async def _check_mcp_connectivity(self) -> bool:
-        """Check if the Terraform MCP server is reachable (Section 5.6)."""
+        firecrawl_key = os.environ.get("FIRECRAWL_API_KEY", "")
+        if not firecrawl_key:
+            logger.warning("FIRECRAWL_API_KEY not set — Firecrawl MCP unavailable")
+            return False
+        mcp_url = f"https://mcp.firecrawl.dev/{firecrawl_key}/v2/mcp"
         try:
             exit_code, output = await asyncio.to_thread(
                 self._container.exec_run,
-                ["sh", "-c", "curl -s --max-time 5 --connect-timeout 3 -o /dev/null -X POST http://terraform-mcp:8080/mcp && echo ok || echo fail"],
+                [
+                    "sh", "-c",
+                    "curl -s --max-time 10 --connect-timeout 5 "
+                    '-H "Content-Type: application/json" '
+                    '-H "Accept: application/json, text/event-stream" '
+                    '-d \'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"healthcheck","version":"1.0.0"}}}\' '
+                    f'"{mcp_url}"',
+                ],
                 user="agent",
             )
             text = decode_output(output).strip()
-            if "ok" in text:
-                logger.info("Terraform MCP server is reachable")
+            if exit_code == 0 and "serverInfo" in text:
+                logger.info("Firecrawl MCP server is available and responding")
                 return True
-            logger.warning(f"Terraform MCP server health check returned: {text}")
+            logger.warning(f"Firecrawl MCP health check failed (exit {exit_code}): {text[:200]}")
             return False
         except Exception as e:
-            logger.warning(f"MCP connectivity check failed: {e}")
+            logger.warning(f"MCP health check failed: {e}")
             return False
 
     async def _run_agent_phase(self, phase: str, extra_args: list[str] | None = None, extra_env: dict | None = None) -> dict | None:
@@ -285,27 +343,23 @@ class DeployRunner(RunnerBase):
             elif msg.get("type") == "questions":
                 await self._try_send({"type": "questions", "data": msg.get("data")})
             else:
-                # Log non-critical messages to terminal only
                 msg_type = msg.get("type", "info")
                 msg_content = msg.get("content", "")
                 if msg_type == "error":
-                    # Only send errors to frontend
                     logger.error(msg_content)
                     await self._send_message("error", msg_content)
                 else:
-                    # All other messages (phase, success, debug, info) go to backend logs only
                     logger.info(f"[{msg_type.upper()}] {msg_content}")
 
         return result
 
     def _clear_volumes(self):
-        """Clear contents of both codebase and deploy volumes."""
         try:
             self._container.exec_run(
                 [
                     "sh", "-c",
-                    "rm -rf /workspace/codebase/* /workspace/codebase/.[!.]* /workspace/codebase/..?* "
-                    "/workspace/deploy/* /workspace/deploy/.[!.]* /workspace/deploy/..?* 2>/dev/null || true"
+                    "rm -rf /workspace/codebase/* /workspace/codebase/.[!.]* /workspace/codebase/..?* 2>/dev/null || true; "
+                    "find /workspace/deploy -mindepth 1 -maxdepth 1 ! -name 'AWS Infra' -exec rm -rf {} + 2>/dev/null || true"
                 ],
                 user="agent",
             )
@@ -314,12 +368,11 @@ class DeployRunner(RunnerBase):
             logger.error("Failed to clear volumes: %s", e)
 
     def _setup_terraform_directories(self):
-        """Create terraform directories in the deploy volume."""
         try:
             self._container.exec_run(
                 [
                     "sh", "-c",
-                    "mkdir -p /workspace/deploy/terraform/code /workspace/deploy/terraform/cost"
+                    "mkdir -p /workspace/deploy/terraform/code /workspace/deploy/terraform/cost '/workspace/deploy/AWS Infra'"
                 ],
                 user="agent",
             )
@@ -329,7 +382,6 @@ class DeployRunner(RunnerBase):
             raise
 
     def _copy_codebase_to_volume(self) -> tuple[bool, str]:
-        """Copy codebase from host into Docker Codebase volume. Returns (success, error_msg)."""
         try:
             user_id = self.context.user_id
             project_id = self.project_id
@@ -352,14 +404,12 @@ class DeployRunner(RunnerBase):
 
             logger.info(f"Copying codebase from {host_path} to Docker volume")
 
-            # Clear codebase first to avoid conflicts
             self._container.exec_run(
                 ["sh", "-c", "rm -rf /workspace/codebase/* /workspace/codebase/.[!.]* /workspace/codebase/..?* 2>/dev/null || true"],
                 user="agent",
             )
 
             try:
-                # Copy using cp -a through Docker (same approach as Security)
                 output = get_docker_client().containers.run(
                     "alpine",
                     command=["sh", "-c", "cp -a /src/. /workspace/codebase/ && echo Success || echo Failed"],

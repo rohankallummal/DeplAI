@@ -39,8 +39,6 @@ def get_github_user_identity(token: str, owner: str) -> tuple[str, str]:
 
 
 def save_local_changes(project_id: str, user_id: str) -> tuple[bool, str]:
-    """Copy changed files from the ``original/`` subdirectory of the
-    Docker volume back to the host project directory."""
     host_base = os.environ.get("HOST_PROJECTS_DIR")
     if host_base:
         host_path = os.path.join(host_base, user_id, project_id)
@@ -57,8 +55,6 @@ def save_local_changes(project_id: str, user_id: str) -> tuple[bool, str]:
         container = get_docker_client().containers.run(
             "alpine",
             command=["sh", "-c",
-                     # original/ contains only the files the agents
-                     # actually touched — no build artifacts.
                      "cp -a /vol/original/. /dst/ 2>/dev/null; echo Success"],
             volumes={
                 CUSTOMIZE_CODE_VOLUME: {"bind": "/vol", "mode": "ro"},
@@ -90,7 +86,6 @@ def create_customize_pr(
     repo: str,
     default_branch: str = "main",
 ) -> tuple[bool, str, str | None]:
-    """Create a PR with customization changes."""
     branch_name = f"deplai/customize-{project_id}"
     clone_url = f"https://x-access-token:{token}@github.com/{owner}/{repo}.git"
 
@@ -101,8 +96,6 @@ def create_customize_pr(
         "cd /repo",
         f'git config user.email "{user_email}"',
         f'git config user.name "{user_name}"',
-        # Use the existing branch if already checked out (accumulated
-        # sessions), otherwise create it fresh (first session).
         f"git checkout {branch_name} 2>/dev/null || git checkout -b {branch_name}",
         "git add .",
         'git diff --cached --quiet && echo "NO_CHANGES" && exit 0 || true',

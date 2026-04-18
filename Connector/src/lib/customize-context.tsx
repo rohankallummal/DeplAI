@@ -1,6 +1,7 @@
 'use client';
 
 import { createContext, useContext, useState, useRef, useCallback, useMemo } from 'react';
+import { fetchWsToken } from './ws-token';
 
 const WS_BASE_URL = process.env.NEXT_PUBLIC_CUSTOMIZE_WS_URL || 'ws://localhost:8002';
 
@@ -46,7 +47,7 @@ interface ProjectCustomizeState {
 }
 
 interface CustomizeContextValue {
-  startCustomize: (projectId: string, projectName: string, projectType: string) => Promise<void>;
+  startCustomize: (projectId: string, projectName: string) => Promise<void>;
   getCustomizeState: (projectId: string) => ProjectCustomizeState;
   sendChatMessage: (projectId: string, message: string) => void;
   respondToDiff: (projectId: string, diffId: string, approved: boolean) => void;
@@ -77,17 +78,6 @@ const DEFAULT_STATE: ProjectCustomizeState = {
 
 function genId(): string {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
-}
-
-async function fetchWsToken(): Promise<string> {
-  try {
-    const res = await fetch('/api/customize/ws-token');
-    if (!res.ok) return '';
-    const data = await res.json();
-    return data.token || '';
-  } catch {
-    return '';
-  }
 }
 
 const STATUS_MAP: Record<string, CustomizePhase> = {
@@ -232,7 +222,7 @@ export function CustomizeProvider({ children }: { children: React.ReactNode }) {
   }
 
   async function connectWs(projectId: string): Promise<WebSocket> {
-    const wsToken = await fetchWsToken();
+    const wsToken = await fetchWsToken('customize');
     const base = `${WS_BASE_URL}/ws/customize/${projectId}`;
 
     return new Promise<WebSocket>((resolve, reject) => {
@@ -241,7 +231,6 @@ export function CustomizeProvider({ children }: { children: React.ReactNode }) {
       ws.onopen = () => {
         ws.send(JSON.stringify({ action: 'start' }));
         wsRefs.current[projectId] = ws;
-        // Replace the initial error handler with a runtime one
         ws.onerror = () => {
           delete wsRefs.current[projectId];
         };
@@ -257,7 +246,7 @@ export function CustomizeProvider({ children }: { children: React.ReactNode }) {
     });
   }
 
-  const startCustomize = useCallback(async (projectId: string, projectName: string, projectType: string) => {
+  const startCustomize = useCallback(async (projectId: string, projectName: string) => {
     wsRefs.current[projectId]?.close();
 
     setStates(prev => ({
@@ -268,7 +257,6 @@ export function CustomizeProvider({ children }: { children: React.ReactNode }) {
       },
     }));
 
-    // Don't connect eagerly — connection happens on first message send
   }, []);
 
   const sendChatMessage = useCallback(async (projectId: string, message: string) => {
@@ -302,7 +290,6 @@ export function CustomizeProvider({ children }: { children: React.ReactNode }) {
     const ws = wsRefs.current[projectId];
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
 
-    // Update the diff message status
     setStates(prev => {
       const existing = getOrDefault(prev, projectId);
       return {

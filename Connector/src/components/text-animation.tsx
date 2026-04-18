@@ -9,10 +9,6 @@ import Link from 'next/link';
 
 gsap.registerPlugin(GSAPSplitText);
 
-// ---------------------------------------------------------------------------
-// GradientText
-// ---------------------------------------------------------------------------
-
 interface GradientTextProps {
   children: ReactNode;
   className?: string;
@@ -130,20 +126,12 @@ export function GradientText({
   );
 }
 
-// ---------------------------------------------------------------------------
-// LandingTextAnimation
-// ---------------------------------------------------------------------------
-
 type AnimState = 'idle' | 'entering' | 'active' | 'exiting' | 'loading';
 
 interface LandingTextAnimationProps {
   href: string;
   className?: string;
 }
-
-// ---------------------------------------------------------------------------
-// TextType
-// ---------------------------------------------------------------------------
 
 interface TextTypeProps {
   texts: string[];
@@ -225,10 +213,6 @@ export function TextType({
     </span>
   );
 }
-
-// ---------------------------------------------------------------------------
-// LandingTextAnimation
-// ---------------------------------------------------------------------------
 
 export const LandingTextAnimation: React.FC<LandingTextAnimationProps> = ({
   href,

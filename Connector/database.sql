@@ -1,7 +1,7 @@
 CREATE DATABASE DeplaiDB;
 USE DeplaiDB;
 
--- Users table
+
 CREATE TABLE users (
     id VARCHAR(36) PRIMARY KEY,
     email VARCHAR(255) NOT NULL UNIQUE,
@@ -9,7 +9,7 @@ CREATE TABLE users (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- GitHub installations
+
 CREATE TABLE github_installations (
     id VARCHAR(36) PRIMARY KEY,
     installation_id BIGINT NOT NULL UNIQUE,
@@ -25,7 +25,7 @@ CREATE TABLE github_installations (
     INDEX idx_user_id (user_id)
 );
 
--- GitHub repositories
+
 CREATE TABLE github_repositories (
     id VARCHAR(36) PRIMARY KEY,
     installation_id VARCHAR(36) NOT NULL,
@@ -49,7 +49,7 @@ CREATE TABLE github_repositories (
     INDEX idx_needs_refresh (needs_refresh)
 );
 
--- Projects
+
 CREATE TABLE projects (
     id VARCHAR(36) PRIMARY KEY,
     name VARCHAR(255) NOT NULL,

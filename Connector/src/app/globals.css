@@ -86,10 +86,12 @@ body {
   font-family: 'Noto Sans', sans-serif;
 }
 
-.scrollbar-hidden {
+.scrollbar-hidden,
+.scrollbar-hidden * {
   scrollbar-width: none;
 }
-.scrollbar-hidden::-webkit-scrollbar {
+.scrollbar-hidden::-webkit-scrollbar,
+.scrollbar-hidden *::-webkit-scrollbar {
   display: none;
 }
 

@@ -50,7 +50,6 @@ interface ScanResults {
 interface FindingsProps {
   projectId?: string;
   remediating?: boolean;
-  remediationDone?: boolean;
   onCleanScan?: () => void;
   onFindingsReady?: (ready: boolean) => void;
   onLoaded?: () => void;
@@ -289,7 +288,7 @@ function CWEAccordion({ group }: { group: CWEGroup }) {
   );
 }
 
-export default function Findings({ projectId, remediating, remediationDone, onCleanScan, onFindingsReady, onLoaded }: FindingsProps) {
+export default function Findings({ projectId, remediating, onCleanScan, onFindingsReady, onLoaded }: FindingsProps) {
   const { getScanState, getCachedResults, setCachedResults } = useScan();
   const { state } = getScanState(projectId || '');
 

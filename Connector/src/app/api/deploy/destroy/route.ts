@@ -1,6 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { Agent } from 'undici';
 import { requireAuth, verifyProjectOwnership } from '@/lib/auth';
 import { DEPLOY_URL, deployHeaders } from '@/lib/deploy';
+
+export const maxDuration = 1800;
+
+const destroyDispatcher = new Agent({
+  headersTimeout: 30 * 60 * 1000,
+  bodyTimeout: 30 * 60 * 1000,
+  connectTimeout: 30_000,
+});
 
 export async function POST(request: NextRequest) {
   try {
@@ -21,6 +30,8 @@ export async function POST(request: NextRequest) {
       method: 'POST',
       headers: deployHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ project_id }),
+      // @ts-expect-error - undici dispatcher, supported at runtime in Node fetch
+      dispatcher: destroyDispatcher,
     });
 
     if (!response.ok) {

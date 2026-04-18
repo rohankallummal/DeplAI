@@ -11,13 +11,20 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
 )
 
+logging.getLogger("fontTools").setLevel(logging.WARNING)
+logging.getLogger("fontTools.subset").setLevel(logging.WARNING)
+logging.getLogger("fontTools.ttLib").setLevel(logging.WARNING)
+logging.getLogger("weasyprint").setLevel(logging.WARNING)
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Header, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from models import (
     DeployValidationRequest, DeployValidationResponse,
     WebSocketCommand, StreamStatus, DestroyRequest,
 )
 from runner import DeployRunner
+from pdf import render_cost_pdf
 from utils import (
     remove_deploy_container, cleanup_volumes, clear_deploy_artifacts,
     read_volume_file, run_terraform_command,
@@ -176,7 +183,6 @@ async def deploy_status(project_id: str):
 
 
 def parse_terraform_outputs(raw: dict) -> dict:
-    """Categorize terraform outputs into endpoints, credentials, and inventory."""
     endpoints = []
     credentials = []
     inventory = []
@@ -217,7 +223,6 @@ def parse_terraform_outputs(raw: dict) -> dict:
 
 
 def extract_cost_resources(cost_data: dict) -> list:
-    """Extract resource names and costs from infracost JSON v0.2 output."""
     resources = []
     for project in cost_data.get("projects", []):
         breakdown = project.get("breakdown", {})
@@ -233,7 +238,6 @@ def extract_cost_resources(cost_data: dict) -> list:
 
 @app.get("/api/deploy/outputs/{project_id}", dependencies=[Depends(verify_api_key)])
 async def get_deploy_outputs(project_id: str):
-    """Get parsed terraform outputs and cost data."""
     try:
         raw_outputs = await asyncio.to_thread(read_volume_file, "terraform/code/outputs.json")
         if not raw_outputs:
@@ -259,9 +263,24 @@ async def get_deploy_outputs(project_id: str):
         return {"success": False, "error": str(e)}
 
 
+@app.get("/api/deploy/cost-pdf/{project_id}", dependencies=[Depends(verify_api_key)])
+async def get_cost_pdf(project_id: str):
+    context = deploy_contexts.get(project_id)
+    project_name = context.project_name if context else ""
+
+    pdf_bytes = await asyncio.to_thread(render_cost_pdf, project_name)
+    if pdf_bytes is None:
+        raise HTTPException(status_code=404, detail="Cost estimate not available")
+
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": 'attachment; filename="cost-breakdown.pdf"'},
+    )
+
+
 @app.post("/api/deploy/destroy", dependencies=[Depends(verify_api_key)])
 async def destroy_deploy(request: DestroyRequest):
-    """Destroy all AWS resources created by terraform."""
     context = deploy_contexts.get(request.project_id)
     if not context:
         raise HTTPException(status_code=404, detail="No deploy context found")

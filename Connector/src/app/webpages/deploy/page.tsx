@@ -12,6 +12,7 @@ import { useDeploy, type CostData } from '@/lib/deploy-context';
 import DeployQACard from '@/components/deploy-qa-card';
 import loading3d1Animation from '@/components/animation/loading-3d-1.json';
 import loading3d2Animation from '@/components/animation/loading-3d-2.json';
+import loading3d3Animation from '@/components/animation/loading-3d-3.json';
 import costAnimation from '@/components/animation/cost.json';
 import tickAnimation from '@/components/animation/tick.json';
 
@@ -185,7 +186,7 @@ function DeployPageContent() {
         )}
 
         {phase === 'costing' && !deployState?.costData && (
-          <PhaseLoadingState title="Estimating Cost" messages={[]} animationData={costAnimation} animationClassName="w-60 h-60" />
+          <PhaseLoadingState title="Estimating Cost" messages={[]} animationData={costAnimation} animationClassName="w-96 h-96" />
         )}
 
         {phase === 'costing' && deployState?.costData && projectId && (
@@ -196,11 +197,18 @@ function DeployPageContent() {
           />
         )}
 
+        {phase === 'deploying' && (
+          <PhaseLoadingState
+            title="Deploying Application"
+            messages={deployState?.messages || []}
+            animationData={loading3d3Animation}
+          />
+        )}
+
         {phase === 'completed' && projectId && (
           <CompletedState
             projectId={projectId}
             projectName={projectInfo?.name || ''}
-            costData={deployState?.costData || null}
           />
         )}
 
@@ -262,11 +270,9 @@ function PhaseLoadingState({
 function CompletedState({
   projectId,
   projectName,
-  costData,
 }: {
   projectId: string;
   projectName: string;
-  costData: CostData | null;
 }) {
   return (
     <div className="py-8">
@@ -287,7 +293,6 @@ function CompletedState({
       <PostDeploymentDashboard
         projectId={projectId}
         projectName={projectName}
-        costData={costData}
       />
     </div>
   );
@@ -317,6 +322,7 @@ function CostingState({
   return (
     <div className="py-8">
       <CostEstimation
+        projectId={projectId}
         costData={costData}
         onDeploy={handleDeploy}
         onCancel={handleCancel}

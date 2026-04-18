@@ -361,7 +361,7 @@ export class GitHubService {
         continue;
       }
 
-      const result = await this.syncReposForInstallation(inst.id, inst.installation_id);
+      const result = await this.syncReposForInstallation(inst.id);
       totalRemoved += result.removed;
       totalAdded += result.added;
     }
@@ -384,7 +384,6 @@ export class GitHubService {
 
   private async syncReposForInstallation(
     internalId: string,
-    githubInstallationId: number,
   ): Promise<{ removed: number; added: number }> {
     let token: string;
     try {

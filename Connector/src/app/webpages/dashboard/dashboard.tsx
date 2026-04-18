@@ -15,10 +15,8 @@ import Lottie from 'lottie-react';
 import deployingAnimation from '@/components/animation/deploying.json';
 
 interface ProjectsProps {
-  user: any;
   installations: any[];
   projects: any[];
-  stats: { localCount: number; githubCount: number; totalCount: number };
   loading: boolean;
   uploading: boolean;
   fileInputRef: React.RefObject<HTMLInputElement | null>;
@@ -40,11 +38,9 @@ interface ScanResult {
 const PROJECTS_PER_PAGE = 5;
 
 function DeployActivePanel({
-  deployId,
   projectName,
   onClick,
 }: {
-  deployId: string;
   projectName: string;
   onClick: () => void;
 }) {
@@ -90,10 +86,8 @@ function DeployActivePanel({
 }
 
 export default function Projects({
-  user,
   installations,
   projects,
-  stats,
   loading,
   uploading,
   fileInputRef,
@@ -208,9 +202,6 @@ export default function Projects({
     setDeployConfirmOpen(false);
   };
 
-  const getProjectName = (project: any) =>
-    project.type === 'local' ? project.name : project.repo;
-
   const deploySelectedProject = deploySelectedId
     ? projects.find((p) => p.id === deploySelectedId)
     : null;
@@ -308,7 +299,6 @@ export default function Projects({
           disabled={uploading}
         />
 
-        {/* Upload Project */}
         <button
           onClick={() => fileInputRef.current?.click()}
           disabled={uploading}
@@ -329,10 +319,8 @@ export default function Projects({
           </div>
         </button>
 
-        {/* Deploy */}
         {activeDeployIds.length > 0 ? (
           <DeployActivePanel
-            deployId={activeDeployIds[0]}
             projectName={activeDeployProjectNames[activeDeployIds[0]] || 'Project'}
             onClick={() => router.push(`/webpages/deploy?project_id=${activeDeployIds[0]}`)}
           />
@@ -364,7 +352,6 @@ export default function Projects({
           </button>
         )}
 
-        {/* Connect to App */}
         <button
           onClick={handleConnectRepository}
           className="w-full p-8 rounded-xl border border-border hover:border-blue-400 dark:hover:border-blue-500 bg-surface hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-all duration-200 cursor-pointer group"
@@ -472,7 +459,6 @@ export default function Projects({
                     >
                       <div className="flex items-center justify-between mb-4">
                         <div className="flex items-center space-x-3">
-                          {/* Deploy mode: checkbox on the left */}
                           {deployMode && (
                             <div
                               className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-colors flex-shrink-0 ${
@@ -505,7 +491,6 @@ export default function Projects({
                           </div>
                         </div>
 
-                        {/* Deploy mode: Ready button on the selected card */}
                         {deployMode ? (
                           isSelected ? (
                             <button
@@ -519,7 +504,6 @@ export default function Projects({
                             </button>
                           ) : null
                         ) : (
-                          /* Normal mode: action buttons */
                           <div className="flex items-center space-x-2">
                             {project.canDelete && (
                               <button
@@ -570,7 +554,6 @@ export default function Projects({
                         )}
                       </div>
 
-                      {/* Languages — shown in both modes */}
                       {project.type === 'github' && project.languages && Object.keys(project.languages).length > 0 && (
                         <div className="flex flex-wrap gap-2 mt-3">
                           {Object.keys(project.languages).slice(0, 5).map((lang) => (
@@ -584,7 +567,6 @@ export default function Projects({
                         </div>
                       )}
 
-                      {/* Expandable security analysis — hidden in deploy mode */}
                       {!deployMode && (
                         <div className="grid grid-rows-[0fr] group-hover:grid-rows-[1fr] transition-all duration-300">
                           <div className="overflow-hidden">
@@ -639,7 +621,6 @@ export default function Projects({
         </div>
       </div>
 
-      {/* Scan confirmation modal */}
       <ScanModal
         isOpen={scanModalOpen}
         onClose={() => {
@@ -650,7 +631,6 @@ export default function Projects({
         onScanComplete={handleScanComplete}
       />
 
-      {/* Deploy confirmation modal */}
       {deployConfirmOpen && deploySelectedProject && (
         <div className="fixed inset-0 z-50 flex items-center justify-center font-sans">
           <div className="absolute inset-0 bg-black/40 backdrop-blur-sm transition-opacity" />

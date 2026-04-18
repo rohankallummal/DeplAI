@@ -8,6 +8,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     wget \
     unzip \
+    libpango-1.0-0 \
+    libpangoft2-1.0-0 \
+    libharfbuzz0b \
+    libcairo2 \
+    fontconfig \
+    shared-mime-info \
+    fonts-noto \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Node.js 20
@@ -27,12 +34,20 @@ RUN wget -q https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraf
 
 RUN terraform --version
 
+# Install AWS CLI v2 — agent uses it to query live account state as a
+# third grounding source alongside Terraform Registry and AWS docs.
+RUN curl -s "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip" \
+    && unzip -q awscliv2.zip \
+    && ./aws/install \
+    && rm -rf awscliv2.zip aws \
+    && aws --version
+
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 RUN useradd -m -s /bin/bash agent
 
-# Pre-accept Claude CLI terms of service for the agent user
+# Pre-accept Claude CLI terms of service (MCP settings written at runtime with actual API key)
 RUN mkdir -p /home/agent/.claude && \
     echo '{"ackTos":true}' > /home/agent/.claude/settings.json && \
     chown -R agent:agent /home/agent/.claude

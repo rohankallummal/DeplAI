@@ -19,7 +19,6 @@ export default function Dashboard() {
   const [authLoading, setAuthLoading] = useState(true);
   const [installations, setInstallations] = useState<any[]>([]);
   const [projects, setProjects] = useState<any[]>([]);
-  const [stats, setStats] = useState({ localCount: 0, githubCount: 0, totalCount: 0 });
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -82,7 +81,6 @@ export default function Dashboard() {
       const res = await fetch('/api/projects');
       const data = await res.json();
       setProjects(data.projects || []);
-      setStats(data.stats || { localCount: 0, githubCount: 0, totalCount: 0 });
     } catch (error) {
       console.error('Failed to fetch projects:', error);
     }
@@ -216,10 +214,8 @@ export default function Dashboard() {
 
       <div className="container mx-auto px-6 py-8">
         <Projects
-          user={user}
           installations={installations}
           projects={projects}
-          stats={stats}
           loading={loading}
           uploading={uploading}
           fileInputRef={fileInputRef}

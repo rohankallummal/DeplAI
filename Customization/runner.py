@@ -73,7 +73,6 @@ class CustomizationRunner(RunnerBase):
         self._container = await asyncio.to_thread(get_or_create_customize_container)
         self._check_cancelled()
 
-        # Copy codebase into volume
         await self._send_status(StreamStatus.preparing)
         logger.info(f"Copying codebase into Docker volume for project {self.project_id}")
         success, error_msg = await asyncio.to_thread(self._copy_codebase_to_volume)
@@ -82,7 +81,6 @@ class CustomizationRunner(RunnerBase):
             return await self._terminate("Something went wrong preparing your project. Please try again.")
         self._check_cancelled()
 
-        # Set permissions
         await asyncio.to_thread(
             self._container.exec_run,
             [
@@ -94,8 +92,6 @@ class CustomizationRunner(RunnerBase):
             user="root",
         )
 
-        # For local projects, create a snapshot marker so _extract_changes
-        # can later find which files the agents modified.
         if self.context.project_type == "local":
             await asyncio.to_thread(
                 self._container.exec_run,
@@ -103,15 +99,12 @@ class CustomizationRunner(RunnerBase):
                 user="agent",
             )
 
-        # Clear stale work artifacts from previous sessions (pending
-        # diffs, file backups, etc.) before starting the diff daemon.
         await asyncio.to_thread(
             self._container.exec_run,
             ["sh", "-c", "rm -rf /workspace/customize/* /workspace/customize/.[!.]* 2>/dev/null || true"],
             user="agent",
         )
 
-        # Start diff daemon (eliminates ~100-300ms Python cold-start per Edit call)
         await asyncio.to_thread(
             self._container.exec_run,
             [
@@ -125,7 +118,6 @@ class CustomizationRunner(RunnerBase):
         await asyncio.sleep(0.3)
         logger.info("Diff daemon started")
 
-        # Verify Claude CLI
         exit_code, diag_output = await asyncio.to_thread(
             self._container.exec_run,
             ["claude", "--version"],
@@ -138,7 +130,6 @@ class CustomizationRunner(RunnerBase):
             return await self._terminate("Something went wrong. Please try again.")
         logger.info(f"Claude CLI ready ({diag_text})")
 
-        # Wait for user's customization request
         await self._send_status(StreamStatus.running)
         logger.info("Waiting for user customization request")
         await self._chat_event.wait()
@@ -147,7 +138,6 @@ class CustomizationRunner(RunnerBase):
         if self._chat_message is None:
             return await self._terminate("No customization request received")
 
-        # Execute changes with diff monitoring
         await self._send_status(StreamStatus.executing)
         logger.info("Starting styler agent")
 
@@ -168,14 +158,9 @@ class CustomizationRunner(RunnerBase):
             else:
                 return await self._terminate("Something went wrong. Please try again.")
 
-        # Run Builder agent to verify build stability
         if self._changes_made:
             await self._run_builder()
 
-        # For local projects, copy only the files that agents actually
-        # touched into ``original/`` so the save step can skip everything
-        # else.  GitHub projects don't need this — git handles change
-        # detection and .gitignore handles build artifacts.
         if self.context.project_type == "local":
             await self._extract_changes()
 
@@ -187,8 +172,6 @@ class CustomizationRunner(RunnerBase):
         return True
 
     async def _handle_diff_approval(self, diff_data: dict) -> bool:
-        """Send a file-level diff to the frontend and wait for approval.
-        Returns True if the user approved."""
         await self._try_send({
             "type": "diff_preview",
             "data": diff_data,
@@ -204,7 +187,6 @@ class CustomizationRunner(RunnerBase):
         if approved:
             self._changes_made = True
 
-        # Write response so the hook (if still polling) can unblock
         response_json = json.dumps(self._diff_response_data or {"approved": False})
         await asyncio.to_thread(
             self._container.exec_run,
@@ -217,11 +199,8 @@ class CustomizationRunner(RunnerBase):
         return approved
 
     async def _monitor_diffs(self):
-        """Watch for pending file-level diffs and relay to frontend.
-        Uses inotifywait for event-driven detection instead of polling."""
         while not self._cancelled and not self._agent_done.is_set():
             try:
-                # Check if a pending diff already exists
                 exit_code, output = await asyncio.to_thread(
                     self._container.exec_run,
                     ["cat", "/workspace/customize/pending_diff.json"],
@@ -233,7 +212,6 @@ class CustomizationRunner(RunnerBase):
                     except json.JSONDecodeError:
                         pass
                     else:
-                        # Remove immediately to prevent re-read on next iteration
                         await asyncio.to_thread(
                             self._container.exec_run,
                             ["rm", "-f", "/workspace/customize/pending_diff.json"],
@@ -242,7 +220,6 @@ class CustomizationRunner(RunnerBase):
                         await self._handle_diff_approval(diff_data)
                         continue
 
-                # No diff pending — block until the file appears (1s timeout for cancellation checks)
                 await asyncio.to_thread(
                     self._container.exec_run,
                     [
@@ -256,18 +233,12 @@ class CustomizationRunner(RunnerBase):
             except Exception:
                 pass
 
-        # Agent finished — flush remaining edits for the last file
         await self._flush_remaining_edits()
 
     async def _flush_remaining_edits(self):
-        """Send any accumulated edits that haven't been reviewed yet
-        (the last file the agent touched has no file-transition to trigger review).
-        Queries the diff daemon for in-memory state instead of reading files."""
         if self._cancelled:
             return
         try:
-            # Handle any pending diff the monitor loop might have missed
-            # (e.g., daemon wrote pending_diff.json right as agent finished)
             ec, output = await asyncio.to_thread(
                 self._container.exec_run,
                 ["cat", "/workspace/customize/pending_diff.json"],
@@ -282,12 +253,10 @@ class CustomizationRunner(RunnerBase):
                         user="agent",
                     )
                     await self._handle_diff_approval(diff_data)
-                    # Give daemon time to process the response and return to accept()
                     await asyncio.sleep(0.5)
                 except json.JSONDecodeError:
                     pass
 
-            # Query daemon for remaining accumulated hunks (last file)
             state = None
             for _attempt in range(5):
                 ec, output = await asyncio.to_thread(
@@ -316,7 +285,6 @@ class CustomizationRunner(RunnerBase):
             if not hunks or not file_path:
                 return
 
-            # Sort hunks by first line number so diffs read top-to-bottom
             def _hunk_sort_key(h):
                 for line in h.get("lines", []):
                     if "num" in line:
@@ -324,7 +292,6 @@ class CustomizationRunner(RunnerBase):
                 return float("inf")
             hunks.sort(key=_hunk_sort_key)
 
-            # Merge overlapping context between adjacent hunks
             if len(hunks) > 1:
                 merged = [{"lines": list(hunks[0]["lines"])}]
                 for hunk in hunks[1:]:
@@ -353,14 +320,12 @@ class CustomizationRunner(RunnerBase):
 
             approved = await self._handle_diff_approval(diff_data)
             if not approved:
-                # Revert the file from backup
                 await asyncio.to_thread(
                     self._container.exec_run,
                     ["sh", "-c", f"cp /workspace/customize/file_backup '{file_path}'"],
                     user="agent",
                 )
 
-            # Clean up backup
             await asyncio.to_thread(
                 self._container.exec_run,
                 ["sh", "-c", "rm -f /workspace/customize/file_backup"],
@@ -376,9 +341,6 @@ class CustomizationRunner(RunnerBase):
     ]
 
     async def _extract_changes(self):
-        """Find source files in ``edited/`` that agents modified (newer
-        than the snapshot marker) and copy them into ``original/``.
-        Build-artifact directories are skipped."""
         find_prunes = " -o ".join(
             f"-name '{d}'" for d in self._EXTRACT_EXCLUDE_DIRS
         )
@@ -399,7 +361,6 @@ class CustomizationRunner(RunnerBase):
         logger.info("Changed files extracted to original/")
 
     async def _run_builder(self):
-        """Run the Builder agent to verify build stability after Styler changes."""
         self._check_cancelled()
         await self._send_status(StreamStatus.building)
         await self._try_send({"type": "builder_status", "data": {"status": "running"}})
@@ -416,8 +377,6 @@ class CustomizationRunner(RunnerBase):
             await self._send_status(StreamStatus.build_fixing)
             logger.warning("Build failed, builder is attempting fixes")
 
-            # The builder agent already attempts fixes internally (up to 3 attempts).
-            # If it still returned failure, report it but don't block the pipeline.
             await self._try_send({"type": "builder_status", "data": {"status": "failed"}})
             logger.warning("Builder could not resolve all build errors")
 
@@ -444,7 +403,6 @@ class CustomizationRunner(RunnerBase):
         def _read_exec_output():
             buffer = ""
             try:
-                # Redirect stderr to stdout so we capture error details
                 wrapped_cmd = ["sh", "-c", " ".join(f"'{c}'" for c in cmd) + " 2>&1"]
                 _, output = self._container.exec_run(
                     wrapped_cmd, stream=True, workdir="/app", user="agent",
@@ -495,7 +453,6 @@ class CustomizationRunner(RunnerBase):
         return result
 
     async def save_changes(self) -> dict:
-        """Save changes based on project type."""
         await self._send_status(StreamStatus.saving)
 
         if self.context.project_type == "local":
@@ -525,13 +482,9 @@ class CustomizationRunner(RunnerBase):
         return result
 
     async def discard_changes(self):
-        """Discard changes by clearing volumes."""
         await asyncio.to_thread(self._clear_volumes)
 
     def _copy_codebase_to_volume(self) -> tuple[bool, str]:
-        """Copy codebase from host into the ``edited/`` subdirectory of
-        the Docker volume.  An empty ``original/`` directory is created
-        alongside it to receive only the changed files later."""
         try:
             if self.context.project_type == "github":
                 return self._clone_github_repo()
@@ -584,9 +537,6 @@ class CustomizationRunner(RunnerBase):
             return (False, str(e))
 
     def _clone_github_repo(self) -> tuple[bool, str]:
-        """Clone GitHub repository directly into the volume root.
-        If a previous customization branch exists on the remote, check
-        it out so changes accumulate across sessions."""
         try:
             token = self.context.github_token
             repo_url = self.context.repository_url
@@ -608,9 +558,6 @@ class CustomizationRunner(RunnerBase):
 
             branch_name = f"deplai/customize-{self.project_id}"
 
-            # Clone, then check out the existing customization branch if
-            # it exists on the remote.  If it doesn't, stay on the
-            # default branch (first session).
             clone_script = (
                 f"git clone {clone_url} /repo && "
                 f"cd /repo && "
@@ -640,7 +587,6 @@ class CustomizationRunner(RunnerBase):
             return (False, str(e))
 
     def _clear_volumes(self):
-        """Clear contents of both volumes."""
         try:
             self._container.exec_run(
                 [

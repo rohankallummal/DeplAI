@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { CostData } from '@/lib/deploy-context';
+import { useRouter } from 'next/navigation';
+import { FiCopy, FiExternalLink, FiTrash2, FiCheck } from 'react-icons/fi';
 
 interface OutputData {
   success: boolean;
@@ -17,18 +18,30 @@ interface OutputData {
 interface PostDeploymentDashboardProps {
   projectId: string;
   projectName: string;
-  costData?: CostData | null;
+}
+
+function pickApplicationUrl(
+  endpoints: Array<{ name: string; value: string }> | undefined
+): { name: string; value: string } | null {
+  if (!endpoints || endpoints.length === 0) return null;
+  const preferred = endpoints.find(e => /url|endpoint/i.test(e.name));
+  return preferred ?? endpoints[0];
+}
+
+function ensureHttp(url: string): string {
+  if (/^https?:\/\//i.test(url)) return url;
+  return `https://${url}`;
 }
 
 export function PostDeploymentDashboard({
   projectId,
   projectName,
-  costData,
 }: PostDeploymentDashboardProps) {
+  const router = useRouter();
   const [outputs, setOutputs] = useState<OutputData['data'] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [revealedCredentials, setRevealedCredentials] = useState<Record<string, boolean>>({});
+  const [copied, setCopied] = useState(false);
   const [destroyLoading, setDestroyLoading] = useState(false);
   const [showDestroyModal, setShowDestroyModal] = useState(false);
   const [destroyError, setDestroyError] = useState<string | null>(null);
@@ -77,7 +90,7 @@ export function PostDeploymentDashboard({
 
       setDestroySuccess(true);
       setShowDestroyModal(false);
-      setTimeout(() => fetchOutputs(), 2000);
+      setTimeout(() => router.push('/webpages'), 1500);
     } catch (err) {
       console.error('Destroy failed:', err);
       setDestroyError('Failed to destroy resources');
@@ -86,166 +99,125 @@ export function PostDeploymentDashboard({
     }
   }
 
-  function toggleReveal(name: string) {
-    setRevealedCredentials(prev => ({
-      ...prev,
-      [name]: !prev[name],
-    }));
-  }
-
-  function copyToClipboard(value: string) {
-    navigator.clipboard.writeText(value);
+  async function handleCopy(value: string) {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1600);
+    } catch {
+      // noop
+    }
   }
 
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12">
-        <p className="text-muted">Loading deployment outputs...</p>
+        <p className="text-muted text-sm">Loading deployment outputs...</p>
       </div>
     );
   }
 
   if (error && !outputs) {
     return (
-      <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4">
+      <div className="max-w-2xl mx-auto bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl p-4">
         <p className="text-sm text-red-800 dark:text-red-200">Error: {error}</p>
       </div>
     );
   }
 
+  const appUrl = pickApplicationUrl(outputs?.endpoints);
+
   return (
-    <div className="space-y-8">
-      {/* Access & Endpoints */}
-      <section>
-        <h3 className="text-lg font-semibold text-foreground mb-4">Access & Endpoints</h3>
-        {outputs?.endpoints && outputs.endpoints.length > 0 ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {outputs.endpoints.map((endpoint, idx) => (
-              <div key={idx} className="bg-surface border border-border rounded-lg p-4">
-                <div className="text-sm text-muted mb-2 font-medium">{endpoint.name}</div>
-                <div className="font-mono text-sm text-foreground break-all mb-3">{endpoint.value}</div>
-                <button
-                  onClick={() => copyToClipboard(endpoint.value as string)}
-                  className="text-xs px-3 py-1 rounded-lg border border-border bg-surface hover:bg-surface-hover text-foreground transition"
-                >
-                  Copy
-                </button>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <p className="text-muted text-sm">No public endpoints found</p>
-        )}
-      </section>
+    <div className="max-w-2xl mx-auto space-y-6">
+      {/* Application URL card */}
+      <section className="bg-surface border border-border rounded-xl p-6">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-semibold text-muted uppercase tracking-wide">
+            Application URL
+          </h3>
+          {appUrl && (
+            <span className="inline-flex items-center gap-1.5 text-xs font-medium text-emerald-600 dark:text-emerald-400">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+              Live
+            </span>
+          )}
+        </div>
 
-      {/* Infrastructure Inventory */}
-      <section>
-        <h3 className="text-lg font-semibold text-foreground mb-4">Infrastructure Inventory</h3>
-        {outputs?.inventory && outputs.inventory.length > 0 ? (
-          <div className="space-y-3">
-            {outputs.inventory.map((item, idx) => (
-              <div key={idx} className="bg-surface border border-border rounded-lg p-4">
-                <div className="flex items-start justify-between">
-                  <div>
-                    <div className="text-sm text-muted font-medium mb-1">{item.name}</div>
-                    <div className="font-mono text-sm text-foreground break-all">{item.value}</div>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <p className="text-muted text-sm">No infrastructure resources found</p>
-        )}
-
-        {/* Cost-annotated resources */}
-        {outputs?.cost_resources && outputs.cost_resources.length > 0 && (
-          <div className="mt-6">
-            <h4 className="text-sm font-semibold text-foreground mb-3">Cost by Resource (Monthly)</h4>
-            <div className="space-y-2">
-              {outputs.cost_resources.map((resource, idx) => (
-                <div key={idx} className="flex items-center justify-between p-3 bg-surface border border-border rounded-lg">
-                  <span className="text-sm text-foreground">{resource.name}</span>
-                  <span className="text-sm font-semibold text-blue-600">${resource.monthly_cost.toFixed(2)}</span>
-                </div>
-              ))}
+        {appUrl ? (
+          <>
+            <div className="font-mono text-base text-foreground break-all mb-5 leading-relaxed">
+              {appUrl.value}
             </div>
-          </div>
+
+            <div className="flex gap-2">
+              <a
+                href={ensureHttp(appUrl.value)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-foreground text-background text-sm font-medium hover:opacity-90 transition"
+              >
+                <FiExternalLink className="w-4 h-4" />
+                Open
+              </a>
+              <button
+                onClick={() => handleCopy(appUrl.value)}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-border bg-surface text-foreground text-sm font-medium hover:bg-card transition"
+              >
+                {copied ? (
+                  <>
+                    <FiCheck className="w-4 h-4" />
+                    Copied
+                  </>
+                ) : (
+                  <>
+                    <FiCopy className="w-4 h-4" />
+                    Copy
+                  </>
+                )}
+              </button>
+            </div>
+          </>
+        ) : (
+          <p className="text-sm text-muted">
+            No application URL was exposed by this deployment.
+          </p>
         )}
       </section>
 
-      {/* Security & Access Credentials */}
-      {outputs?.credentials && outputs.credentials.length > 0 && (
-        <section>
-          <h3 className="text-lg font-semibold text-foreground mb-4">Security & Access Credentials</h3>
-          <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4 mb-4">
-            <p className="text-sm text-yellow-800 dark:text-yellow-200">
-              Store these securely. They will not be shown again.
+      {/* Delete card */}
+      <section className="bg-surface border border-border rounded-xl p-6">
+        <div className="flex items-start justify-between gap-6">
+          <div className="flex-1">
+            <h3 className="text-sm font-semibold text-foreground mb-1">
+              Delete Deployment
+            </h3>
+            <p className="text-sm text-muted leading-relaxed">
+              Permanently destroy all AWS resources for{' '}
+              <span className="font-medium text-foreground">{projectName}</span>.
+              This action cannot be undone.
             </p>
+            {destroyError && (
+              <p className="text-sm text-red-600 dark:text-red-400 mt-3">
+                {destroyError}
+              </p>
+            )}
           </div>
-          <div className="space-y-3">
-            {outputs.credentials.map((cred, idx) => {
-              const isRevealed = revealedCredentials[cred.name];
-              return (
-                <div key={idx} className="bg-surface border border-border rounded-lg p-4">
-                  <div className="flex items-start justify-between mb-2">
-                    <div className="text-sm text-muted font-medium">{cred.name}</div>
-                    {cred.sensitive && (
-                      <span className="text-xs px-2 py-1 rounded-full bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300">
-                        Sensitive
-                      </span>
-                    )}
-                  </div>
-                  <div className="font-mono text-sm text-foreground break-all mb-3">
-                    {isRevealed ? cred.value : '••••••••'}
-                  </div>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => toggleReveal(cred.name)}
-                      className="text-xs px-3 py-1 rounded-lg border border-border bg-surface hover:bg-surface-hover text-foreground transition"
-                    >
-                      {isRevealed ? 'Hide' : 'Reveal'}
-                    </button>
-                    <button
-                      onClick={() => copyToClipboard(cred.value as string)}
-                      className="text-xs px-3 py-1 rounded-lg border border-border bg-surface hover:bg-surface-hover text-foreground transition"
-                    >
-                      Copy
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </section>
-      )}
-
-      {/* Delete Infrastructure */}
-      <section className="border-t border-border pt-8">
-        <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-6">
-          <h3 className="text-lg font-semibold text-red-700 dark:text-red-300 mb-2">Delete Infrastructure</h3>
-          <p className="text-sm text-red-600 dark:text-red-400 mb-4">
-            Destroy all AWS resources. This action cannot be undone and will incur no further charges.
-          </p>
           <button
             onClick={() => setShowDestroyModal(true)}
             disabled={destroyLoading || destroySuccess}
-            className="px-4 py-2 rounded-lg bg-red-600 text-white font-medium hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed transition"
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-red-600 text-white text-sm font-medium hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed transition flex-shrink-0"
           >
-            {destroySuccess ? 'Resources Destroyed' : destroyLoading ? 'Destroying...' : 'Destroy All Resources'}
+            <FiTrash2 className="w-4 h-4" />
+            {destroySuccess ? 'Destroyed' : destroyLoading ? 'Destroying...' : 'Delete'}
           </button>
-          {destroyError && (
-            <p className="text-sm text-red-600 dark:text-red-400 mt-2">{destroyError}</p>
-          )}
         </div>
       </section>
 
-      {/* Destroy Confirmation Modal */}
       {showDestroyModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center font-sans">
           <div
             className="absolute inset-0 bg-black/40 backdrop-blur-sm transition-opacity"
-            onClick={() => setShowDestroyModal(false)}
+            onClick={() => !destroyLoading && setShowDestroyModal(false)}
           />
           <div className="relative bg-white dark:bg-[#0a0a0a] rounded-xl shadow-2xl w-full max-w-[480px] mx-4 overflow-hidden flex flex-col animate-in fade-in zoom-in-95 duration-200">
             <div className="px-6 py-4 border-b border-border">
@@ -254,7 +226,8 @@ export function PostDeploymentDashboard({
 
             <div className="px-6 py-4 flex-1">
               <p className="text-sm text-muted mb-4">
-                This will permanently destroy all AWS resources created for <strong>{projectName}</strong>.
+                This will permanently destroy all AWS resources created for{' '}
+                <strong className="text-foreground">{projectName}</strong>.
               </p>
               <p className="text-sm text-red-600 dark:text-red-400 font-medium">
                 This action cannot be undone.
