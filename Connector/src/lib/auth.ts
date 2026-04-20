@@ -71,6 +71,41 @@ export async function verifyProjectOwnership(
   return { project };
 }
 
+export async function verifyAnyProjectAccess(
+  userId: string,
+  projectId: string
+): Promise<{ project: any; error?: never } | { project?: never; error: NextResponse }> {
+  const [localProject] = await query<any[]>(
+    `SELECT id, name, project_type, user_id
+     FROM projects
+     WHERE id = ?`,
+    [projectId]
+  );
+
+  if (localProject) {
+    if (localProject.user_id !== userId) {
+      return { error: NextResponse.json({ error: 'Forbidden: You do not own this project' }, { status: 403 }) };
+    }
+    return { project: localProject };
+  }
+
+  const [ghRepo] = await query<any[]>(
+    `SELECT r.id, r.full_name, i.user_id
+     FROM github_repositories r
+     JOIN github_installations i ON i.id = r.installation_id
+     WHERE r.id = ?`,
+    [projectId]
+  );
+
+  if (!ghRepo) {
+    return { error: NextResponse.json({ error: 'Project not found' }, { status: 404 }) };
+  }
+  if (ghRepo.user_id !== userId) {
+    return { error: NextResponse.json({ error: 'Forbidden: You do not own this project' }, { status: 403 }) };
+  }
+  return { project: { id: ghRepo.id, name: ghRepo.full_name, project_type: 'github', user_id: ghRepo.user_id } };
+}
+
 export async function verifyRepositoryOwnership(
   userId: string,
   owner: string,

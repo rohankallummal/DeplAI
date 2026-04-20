@@ -86,6 +86,15 @@ body {
   font-family: 'Noto Sans', sans-serif;
 }
 
+.no-transitions,
+.no-transitions *,
+.no-transitions *::before,
+.no-transitions *::after {
+  transition: none !important;
+  animation-duration: 0s !important;
+  animation-delay: 0s !important;
+}
+
 .scrollbar-hidden,
 .scrollbar-hidden * {
   scrollbar-width: none;

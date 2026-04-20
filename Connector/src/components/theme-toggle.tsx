@@ -8,6 +8,19 @@ function applyTheme(dark: boolean) {
   localStorage.setItem('theme', dark ? 'dark' : 'light');
 }
 
+function applyThemeInstant(dark: boolean) {
+  const root = document.documentElement;
+  root.classList.add('no-transitions');
+  applyTheme(dark);
+  // Force reflow before re-enabling transitions, then clear next frame.
+  void root.offsetHeight;
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      root.classList.remove('no-transitions');
+    });
+  });
+}
+
 export default function ThemeToggle() {
   const [isDark, setIsDark] = useState(true);
   const [mounted, setMounted] = useState(false);
@@ -22,7 +35,7 @@ export default function ThemeToggle() {
   const toggleTheme = () => {
     const newDark = !isDark;
     setIsDark(newDark);
-    applyTheme(newDark);
+    applyThemeInstant(newDark);
   };
 
   if (!mounted) {

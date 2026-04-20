@@ -6,46 +6,39 @@ from claude_agent_sdk import query, ClaudeAgentOptions
 logger = logging.getLogger(__name__)
 
 PROMPT_DIR = Path(__file__).resolve().parent.parent / "prompt"
-SYSTEM_PROMPT = (PROMPT_DIR / "executor.md").read_text(encoding="utf-8")
-RETRY_ADDENDUM = (PROMPT_DIR / "executor-retry.md").read_text(encoding="utf-8")
+SYSTEM_PROMPT_TEMPLATE = (PROMPT_DIR / "executor.md").read_text(encoding="utf-8")
 
 
 async def run(
     codebase_path: str,
     workspace_path: str,
-    cycle_num: int = 1,
-    cycle_history: str = "",
+    project_name: str,
+    project_id: str,
 ) -> bool:
     tools = [
-        "Read", "Write", "Edit", "MultiEdit",
+        "Read", "Write", "Edit",
         "Bash", "Glob", "Grep", "Agent",
-        "WebSearch", "WebFetch",
+        "mcp__firecrawl",
     ]
 
-    system_prompt = SYSTEM_PROMPT
-    if cycle_num > 1 and cycle_history:
-        system_prompt += RETRY_ADDENDUM.format(
-            cycle_num=cycle_num,
-            cycle_history=cycle_history,
-        )
+    system_prompt = (
+        SYSTEM_PROMPT_TEMPLATE
+        .replace("{project_name}", project_name)
+        .replace("{project_id}", project_id)
+    )
 
     prompt = (
         f"Read the codebase context at {workspace_path}/context.md and the "
         f"vulnerability scan results at {workspace_path}/scan_data.json. "
-        f"Fix all vulnerabilities in the source code at {codebase_path}."
+        f"Fix all vulnerabilities in the source code at {codebase_path}, "
     )
-    if cycle_num > 1:
-        prompt += (
-            f"\n\nThis is cycle {cycle_num}. Review the cycle history in your "
-            f"system prompt and use DIFFERENT strategies for previously failed fixes."
-        )
 
     options = ClaudeAgentOptions(
-        model="sonnet",
+        model="opus",
         allowed_tools=tools,
         permission_mode="bypassPermissions",
         cwd=codebase_path,
-        max_turns=80,
+        max_turns=240,
         system_prompt=system_prompt,
     )
 

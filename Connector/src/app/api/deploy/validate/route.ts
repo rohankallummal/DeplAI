@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireAuth, verifyProjectOwnership } from '@/lib/auth';
+import { requireAuth, verifyAnyProjectAccess } from '@/lib/auth';
 import { githubService } from '@/lib/github';
 import { DEPLOY_URL, deployHeaders } from '@/lib/deploy';
 
@@ -18,7 +18,7 @@ export async function POST(request: NextRequest) {
       repo,
     } = body;
 
-    const ownership = await verifyProjectOwnership(user.id, project_id);
+    const ownership = await verifyAnyProjectAccess(user.id, project_id);
     if (ownership.error) return ownership.error;
 
     const backendPayload: Record<string, any> = {

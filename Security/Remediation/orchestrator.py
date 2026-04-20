@@ -2,9 +2,10 @@ import glob
 import json
 import logging
 import os
+import re
 from typing import Callable, Awaitable
 
-from Remediation.agents import context_builder, executor, reviewer, verifier
+from Remediation.agents import context_builder, executor
 from scans.result_parser import _parse_bearer_report, _parse_grype_report
 
 logger = logging.getLogger(__name__)
@@ -12,7 +13,31 @@ logger = logging.getLogger(__name__)
 CODEBASE_PATH = "/codebase"
 WORKSPACE_PATH = "/workspace"
 SECURITY_REPORTS_PATH = "/security_reports"
-MAX_CYCLES = 3
+
+
+def _read_file(path: str) -> str | None:
+    try:
+        with open(path) as f:
+            return f.read()
+    except FileNotFoundError:
+        return None
+
+
+def _safe_parse(fn, raw: str | None) -> list:
+    if not raw:
+        return []
+    try:
+        return fn(raw)
+    except Exception as e:
+        logger.warning("Failed to parse report: %s", e)
+        return []
+
+
+def _parse_reports(bearer_raw: str | None, grype_raw: str | None) -> dict:
+    return {
+        "supply_chain": _safe_parse(_parse_grype_report, grype_raw),
+        "code_security": _safe_parse(lambda r: _parse_bearer_report(r, include_docs=False), bearer_raw),
+    }
 
 
 class Orchestrator:
@@ -26,11 +51,9 @@ class Orchestrator:
         self.project_name = project_name
         self.project_id = project_id
         self.on_message = on_message
-        self.cycle_history: list[dict] = []
 
     async def run(self) -> dict:
         await self.on_message("phase", "Initializing remediation pipeline")
-
         self._prepare_workspace()
 
         await self.on_message("info", "Loading scan reports")
@@ -48,137 +71,47 @@ class Orchestrator:
             return {"success": False, "message": "Context builder failed", "cycles_run": 0}
         await self.on_message("success", "Codebase context ready")
 
-        prev_vuln_ids = self._extract_vuln_ids(scan_data)
-
-        for cycle in range(1, MAX_CYCLES + 1):
-            result = await self._run_cycle(cycle, prev_vuln_ids)
-            if result is not None:
-                return result
-
-            new_scan_data = self._read_cycle_scan_data(cycle)
-            new_vuln_ids = self._extract_vuln_ids(new_scan_data)
-
-            self._write_json("scan_data.json", new_scan_data)
-            prev_vuln_ids = new_vuln_ids
-
-        return {"success": False, "message": "Unexpected exit", "cycles_run": MAX_CYCLES}
-
-    async def _run_cycle(self, cycle: int, prev_vuln_ids: set[str]) -> dict | None:
-        await self.on_message("phase", f"Cycle {cycle}: Starting remediation")
-
-        await self.on_message("info", f"Cycle {cycle}: Executing fixes")
-        history_str = self._format_cycle_history() if cycle > 1 else ""
+        await self.on_message("phase", "Remediating codebase")
         if not await executor.run(
             CODEBASE_PATH,
             WORKSPACE_PATH,
-            cycle_num=cycle,
-            cycle_history=history_str,
+            project_name=self.project_name,
+            project_id=self.project_id,
         ):
-            await self.on_message("error", f"Cycle {cycle}: Executor failed")
-            return {"success": False, "message": f"Executor failed on cycle {cycle}", "cycles_run": cycle}
-        await self.on_message("success", f"Cycle {cycle}: Fixes applied")
+            await self.on_message("error", "Executor failed")
+            return {"success": False, "message": "Executor failed", "cycles_run": 0}
+        await self.on_message("success", "Executor complete")
 
-        await self.on_message("info", f"Cycle {cycle}: Reviewing changes")
-        if not await reviewer.run(CODEBASE_PATH, WORKSPACE_PATH):
-            await self.on_message("error", f"Cycle {cycle}: Reviewer failed")
-            return {"success": False, "message": f"Reviewer failed on cycle {cycle}", "cycles_run": cycle}
-        await self.on_message("success", f"Cycle {cycle}: Review complete")
-
-        await self.on_message("info", f"Cycle {cycle}: Verifying fixes")
-        if not await verifier.run(WORKSPACE_PATH, self.project_name, self.project_id, cycle):
-            await self.on_message("error", f"Cycle {cycle}: Verifier failed")
-            return {"success": False, "message": f"Verifier failed on cycle {cycle}", "cycles_run": cycle}
-        await self.on_message("success", f"Cycle {cycle}: Verification complete")
-
-        new_scan_data = self._read_cycle_scan_data(cycle)
-        new_vuln_ids = self._extract_vuln_ids(new_scan_data)
-
-        resolved = prev_vuln_ids - new_vuln_ids
-        remaining = prev_vuln_ids & new_vuln_ids
-        new_vulns = new_vuln_ids - prev_vuln_ids
-
-        self.cycle_history.append({
-            "cycle": cycle,
-            "resolved": list(resolved),
-            "remaining": list(remaining),
-            "new_vulns": list(new_vulns),
-        })
-
-        total_remaining = len(remaining) + len(new_vulns)
+        final_cycle, final_scan_data = self._read_latest_cycle_scan_data()
+        total_remaining = len(self._extract_vuln_ids(final_scan_data))
+        cycles_run = max(final_cycle, 1)
 
         if total_remaining == 0:
-            await self.on_message("success", f"All vulnerabilities resolved after cycle {cycle}!")
-            return {"success": True, "message": "All vulnerabilities resolved", "cycles_run": cycle}
+            msg = f"All vulnerabilities resolved after {cycles_run} cycle(s)"
+            await self.on_message("success", msg)
+            return {"success": True, "message": "All vulnerabilities resolved", "cycles_run": cycles_run}
 
-        if total_remaining >= len(prev_vuln_ids) and cycle > 1:
-            await self.on_message(
-                "warning",
-                f"No progress detected after cycle {cycle}. {total_remaining} vulnerabilities remain.",
-            )
-            return {
-                "success": False,
-                "message": f"No progress after {cycle} cycles. {total_remaining} vulnerabilities remain.",
-                "cycles_run": cycle,
-            }
-
-        if cycle == MAX_CYCLES:
-            await self.on_message(
-                "warning",
-                f"Maximum {MAX_CYCLES} cycles reached. {total_remaining} vulnerabilities remain.",
-            )
-            return {
-                "success": False,
-                "message": f"Max cycles reached. {total_remaining} vulnerabilities remain.",
-                "cycles_run": cycle,
-            }
-
-        return None
+        msg = f"{total_remaining} vulnerabilities remain after {cycles_run} cycle(s)"
+        await self.on_message("warning", msg)
+        return {"success": False, "message": msg, "cycles_run": cycles_run}
 
     def _prepare_workspace(self):
-        os.makedirs(WORKSPACE_PATH, exist_ok=True)
-        os.makedirs(os.path.join(WORKSPACE_PATH, "security"), exist_ok=True)
-        os.makedirs(os.path.join(WORKSPACE_PATH, "Knowledge-Store"), exist_ok=True)
+        for subdir in ("", "security", "Knowledge-Store"):
+            os.makedirs(os.path.join(WORKSPACE_PATH, subdir), exist_ok=True)
 
     def _load_initial_scan_data(self) -> dict | None:
-        bearer_files = glob.glob(
-            os.path.join(SECURITY_REPORTS_PATH, f"*_{self.project_id}_Bearer.json")
-        )
-        grype_files = glob.glob(
-            os.path.join(SECURITY_REPORTS_PATH, f"*_{self.project_id}_Grype.json")
-        )
+        bearer_files = glob.glob(os.path.join(SECURITY_REPORTS_PATH, f"*_{self.project_id}_Bearer.json"))
+        grype_files = glob.glob(os.path.join(SECURITY_REPORTS_PATH, f"*_{self.project_id}_Grype.json"))
 
-        bearer_raw = None
-        grype_raw = None
-
-        if bearer_files:
-            with open(bearer_files[0]) as f:
-                bearer_raw = f.read()
-        if grype_files:
-            with open(grype_files[0]) as f:
-                grype_raw = f.read()
+        bearer_raw = _read_file(bearer_files[0]) if bearer_files else None
+        grype_raw = _read_file(grype_files[0]) if grype_files else None
 
         if bearer_raw is None and grype_raw is None:
             return None
-
-        code_security = []
-        if bearer_raw:
-            try:
-                code_security = _parse_bearer_report(bearer_raw, include_docs=False)
-            except Exception:
-                pass
-
-        supply_chain = []
-        if grype_raw:
-            try:
-                supply_chain = _parse_grype_report(grype_raw)
-            except Exception:
-                pass
-
-        return {"supply_chain": supply_chain, "code_security": code_security}
+        return _parse_reports(bearer_raw, grype_raw)
 
     def _write_json(self, filename: str, data: dict):
-        path = os.path.join(WORKSPACE_PATH, filename)
-        with open(path, "w") as f:
+        with open(os.path.join(WORKSPACE_PATH, filename), "w") as f:
             json.dump(data, f, indent=2)
 
     @staticmethod
@@ -192,36 +125,22 @@ class Orchestrator:
                 ids.add(group["cwe_id"])
         return ids
 
-    def _read_cycle_scan_data(self, cycle: int) -> dict:
-        cycle_dir = os.path.join(WORKSPACE_PATH, "security", f"cycle{cycle}")
-        scan_data: dict = {"supply_chain": [], "code_security": []}
+    def _read_latest_cycle_scan_data(self) -> tuple[int, dict]:
+        security_dir = os.path.join(WORKSPACE_PATH, "security")
+        empty: dict = {"supply_chain": [], "code_security": []}
+        if not os.path.isdir(security_dir):
+            return (0, empty)
 
-        bearer_path = os.path.join(cycle_dir, "bearer.json")
-        if os.path.exists(bearer_path):
-            try:
-                with open(bearer_path) as f:
-                    raw = f.read()
-                scan_data["code_security"] = _parse_bearer_report(raw, include_docs=False)
-            except Exception as e:
-                logger.warning("Failed to parse cycle Bearer report: %s", e)
+        cycle_nums = [
+            int(m.group(1))
+            for name in os.listdir(security_dir)
+            if (m := re.fullmatch(r"cycle(\d+)", name))
+        ]
+        if not cycle_nums:
+            return (0, empty)
 
-        grype_path = os.path.join(cycle_dir, "grype.json")
-        if os.path.exists(grype_path):
-            try:
-                with open(grype_path) as f:
-                    raw = f.read()
-                scan_data["supply_chain"] = _parse_grype_report(raw)
-            except Exception as e:
-                logger.warning("Failed to parse cycle Grype report: %s", e)
-
-        return scan_data
-
-    def _format_cycle_history(self) -> str:
-        parts = []
-        for rec in self.cycle_history:
-            part = f"### Cycle {rec['cycle']}\n"
-            part += f"- **Resolved**: {', '.join(rec['resolved']) or 'None'}\n"
-            part += f"- **Remaining**: {', '.join(rec['remaining']) or 'None'}\n"
-            part += f"- **New vulnerabilities**: {', '.join(rec['new_vulns']) or 'None'}\n"
-            parts.append(part)
-        return "\n".join(parts)
+        latest = max(cycle_nums)
+        cycle_dir = os.path.join(security_dir, f"cycle{latest}")
+        bearer_raw = _read_file(os.path.join(cycle_dir, "bearer.json"))
+        grype_raw = _read_file(os.path.join(cycle_dir, "grype.json"))
+        return (latest, _parse_reports(bearer_raw, grype_raw))

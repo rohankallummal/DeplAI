@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireAuth, verifyProjectOwnership } from '@/lib/auth';
+import { requireAuth, verifyAnyProjectAccess } from '@/lib/auth';
 import { SECURITY_URL, securityHeaders } from '@/lib/security';
 
 export async function GET(request: NextRequest) {
@@ -12,7 +12,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'project_id is required' }, { status: 400 });
     }
 
-    const ownership = await verifyProjectOwnership(user.id, projectId);
+    const ownership = await verifyAnyProjectAccess(user.id, projectId);
     if (ownership.error) return ownership.error;
 
     const response = await fetch(`${SECURITY_URL}/api/operations/status/${projectId}`, {

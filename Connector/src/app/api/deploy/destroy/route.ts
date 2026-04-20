@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { Agent } from 'undici';
-import { requireAuth, verifyProjectOwnership } from '@/lib/auth';
+import { requireAuth, verifyAnyProjectAccess } from '@/lib/auth';
 import { DEPLOY_URL, deployHeaders } from '@/lib/deploy';
 
 export const maxDuration = 1800;
@@ -23,7 +23,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'project_id is required' }, { status: 400 });
     }
 
-    const ownership = await verifyProjectOwnership(user.id, project_id);
+    const ownership = await verifyAnyProjectAccess(user.id, project_id);
     if (ownership.error) return ownership.error;
 
     const response = await fetch(`${DEPLOY_URL}/api/deploy/destroy`, {

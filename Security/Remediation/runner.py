@@ -1,6 +1,8 @@
 import asyncio
+import base64
 import json
 import logging
+import os
 import queue as thread_queue
 
 from fastapi import WebSocket
@@ -11,12 +13,14 @@ from utils import (
     get_docker_client,
     get_or_create_remediation_container,
     clear_agent_artifacts,
+    decode_output,
     REMEDIATION_CONTAINER_NAME,
 )
 
 logger = logging.getLogger(__name__)
 
 TOTAL_STEPS = 12
+MCP_HEARTBEAT_INTERVAL = 120.0
 
 _last_project_id: str | None = None
 
@@ -34,9 +38,12 @@ class RemediationRunner(RunnerBase):
         self.context = context
         self._container = None
         self.remediation_result: dict | None = None
+        self._mcp_heartbeat_task: asyncio.Task | None = None
 
     def cancel(self):
         super().cancel()
+        if self._mcp_heartbeat_task and not self._mcp_heartbeat_task.done():
+            self._mcp_heartbeat_task.cancel()
         if self._container:
             try:
                 self._container.exec_run(
@@ -76,16 +83,44 @@ class RemediationRunner(RunnerBase):
             user="root",
         )
 
+        firecrawl_key = os.environ.get("FIRECRAWL_API_KEY", "")
+        mcp_settings: dict = {"ackTos": True}
+        if firecrawl_key:
+            mcp_settings["mcpServers"] = {
+                "firecrawl": {"url": f"https://mcp.firecrawl.dev/{firecrawl_key}/v2/mcp"},
+            }
+        settings_b64 = base64.b64encode(json.dumps(mcp_settings).encode()).decode()
+        await asyncio.to_thread(
+            self._container.exec_run,
+            ["sh", "-c", f"mkdir -p /home/agent/.claude && echo {settings_b64} | base64 -d > /home/agent/.claude/settings.json && chown -R agent:agent /home/agent/.claude"],
+            user="root",
+        )
+
         exit_code, diag_output = await asyncio.to_thread(
             self._container.exec_run,
             ["claude", "--version"],
             user="agent",
             environment={"HOME": "/home/agent"},
         )
-        diag_text = diag_output.decode(errors="replace").strip() if isinstance(diag_output, bytes) else str(diag_output)
+        diag_text = decode_output(diag_output).strip()
         if exit_code != 0:
             return await self._terminate(f"Claude CLI check failed (exit {exit_code}): {diag_text}")
         await self._send_message("debug", f"Claude CLI ready ({diag_text})")
+
+        if firecrawl_key:
+            mcp_ok = await self._check_mcp_connectivity()
+            if not mcp_ok:
+                await self._send_message(
+                    "warning",
+                    "Firecrawl MCP health check failed — web research will be unavailable during remediation",
+                )
+            else:
+                self._mcp_heartbeat_task = asyncio.create_task(self._heartbeat_mcp())
+        else:
+            await self._send_message(
+                "warning",
+                "FIRECRAWL_API_KEY not set — web research will be unavailable during remediation",
+            )
 
         await self._send_message("debug", "Starting remediation pipeline")
 
@@ -139,4 +174,51 @@ class RemediationRunner(RunnerBase):
         if result:
             await self._send_result(result)
 
+        if self._mcp_heartbeat_task and not self._mcp_heartbeat_task.done():
+            self._mcp_heartbeat_task.cancel()
+
         return True
+
+    async def _heartbeat_mcp(self, interval: float = MCP_HEARTBEAT_INTERVAL):
+        try:
+            while not self._cancelled:
+                await asyncio.sleep(interval)
+                if self._cancelled:
+                    return
+                ok = await self._check_mcp_connectivity()
+                if ok:
+                    logger.debug("Firecrawl MCP heartbeat ok")
+                else:
+                    logger.warning("Firecrawl MCP heartbeat failed")
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error("MCP heartbeat crashed: %s", e, exc_info=True)
+
+    async def _check_mcp_connectivity(self) -> bool:
+        firecrawl_key = os.environ.get("FIRECRAWL_API_KEY", "")
+        if not firecrawl_key:
+            return False
+        mcp_url = f"https://mcp.firecrawl.dev/{firecrawl_key}/v2/mcp"
+        try:
+            exit_code, output = await asyncio.to_thread(
+                self._container.exec_run,
+                [
+                    "sh", "-c",
+                    "curl -s --max-time 10 --connect-timeout 5 "
+                    '-H "Content-Type: application/json" '
+                    '-H "Accept: application/json, text/event-stream" '
+                    '-d \'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"healthcheck","version":"1.0.0"}}}\' '
+                    f'"{mcp_url}"',
+                ],
+                user="agent",
+            )
+            text = decode_output(output).strip()
+            if exit_code == 0 and "serverInfo" in text:
+                logger.info("Firecrawl MCP server is available")
+                return True
+            logger.warning(f"Firecrawl MCP health check failed (exit {exit_code}): {text[:200]}")
+            return False
+        except Exception as e:
+            logger.warning(f"MCP health check failed: {e}")
+            return False

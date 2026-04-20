@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { getIronSession } from 'iron-session';
 import { cookies } from 'next/headers';
 import { sessionOptions } from '@/lib/session';
-import { SECURITY_URL, securityHeaders } from '@/lib/security';
+import { SECURITY_URL, securityHeaders, isSecurityBackendAlive } from '@/lib/security';
 import fs from 'fs';
 import path from 'path';
 
@@ -10,17 +10,21 @@ export async function POST() {
   const cookieStore = await cookies();
   const session = await getIronSession(cookieStore, sessionOptions);
 
-  try {
-    const cleanupRes = await fetch(`${SECURITY_URL}/api/cleanup`, {
-      method: 'POST',
-      headers: securityHeaders(),
-    });
-    if (!cleanupRes.ok) {
-      const detail = await cleanupRes.json().catch(() => ({}));
-      console.error('Backend cleanup failed:', cleanupRes.status, detail);
+  if (await isSecurityBackendAlive()) {
+    try {
+      const cleanupRes = await fetch(`${SECURITY_URL}/api/cleanup`, {
+        method: 'POST',
+        headers: securityHeaders(),
+      });
+      if (!cleanupRes.ok) {
+        const detail = await cleanupRes.json().catch(() => ({}));
+        console.error('Backend cleanup failed:', cleanupRes.status, detail);
+      }
+    } catch (err) {
+      console.error('Backend cleanup unreachable:', err);
     }
-  } catch (err) {
-    console.error('Backend cleanup unreachable:', err);
+  } else {
+    console.info('Security backend not reachable — skipping cleanup.');
   }
 
   try {

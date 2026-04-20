@@ -19,6 +19,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 RUN useradd -m -s /bin/bash agent
 
+# Pre-accept Claude CLI terms of service (MCP settings written at runtime with actual API key)
+RUN mkdir -p /home/agent/.claude && \
+    echo '{"ackTos":true}' > /home/agent/.claude/settings.json && \
+    chown -R agent:agent /home/agent/.claude
+
 COPY . .
 
 EXPOSE 8000
