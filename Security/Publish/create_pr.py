@@ -47,11 +47,12 @@ def create_pr(
             entrypoint="sh",
             command=["-c", script],
             volumes={CODEBASE_VOLUME: {"bind": "/repo", "mode": "rw"}},
+            tmpfs={"/git": ""},
             detach=True,
         )
         result = container.wait(timeout=120)
         logs = decode_output(container.logs())
-        container.remove()
+        container.remove(v=True)
 
         if "NO_CHANGES" in logs:
             return (False, "No changes to commit — the codebase is unchanged", None)

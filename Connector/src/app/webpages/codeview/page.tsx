@@ -56,7 +56,7 @@ function RepositoryBrowserContent() {
   const currentPath = searchParams.get('path') || '';
 
   const { showPopup } = usePopup();
-  const { startCustomize, getCustomizeState, discardChanges, resetCustomize } = useCustomize();
+  const { startCustomize, getCustomizeState, resetCustomize, closeCustomize } = useCustomize();
   const [authLoading, setAuthLoading] = useState(true);
   const [pageReady, setPageReady] = useState(false);
   const [projectName, setProjectName] = useState('');
@@ -135,8 +135,8 @@ function RepositoryBrowserContent() {
     doExitChat();
   }
 
-  function doExitChat() {
-    resetCustomize(projectId);
+  function doExitChat(discard = false) {
+    closeCustomize(projectId, discard);
     chatBlockingRef.current = false;
     setChatOpen(false);
     setExitPopupOpen(false);
@@ -165,6 +165,8 @@ function RepositoryBrowserContent() {
       showPopup({ type: 'error', message: 'Save failed. Original files are unchanged.' });
     }
 
+    await closeCustomize(projectId, false);
+
     setSavingProject(false);
     if (isLocal) await fetchContents();
 
@@ -172,8 +174,7 @@ function RepositoryBrowserContent() {
   }
 
   function handleExitDiscard() {
-    discardChanges(projectId);
-    doExitChat();
+    doExitChat(true);
   }
 
   useEffect(() => {

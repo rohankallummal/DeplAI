@@ -4,6 +4,24 @@ import { NextResponse } from 'next/server';
 import { sessionOptions, SessionData } from './session';
 import { query } from './db';
 
+type AccessResult = { project: any; error?: never } | { project?: never; error: NextResponse };
+
+const projectNotFound = () =>
+  NextResponse.json({ error: 'Project not found' }, { status: 404 });
+
+const projectForbidden = () =>
+  NextResponse.json({ error: 'Forbidden: You do not own this project' }, { status: 403 });
+
+async function fetchLocalProject(projectId: string) {
+  const [project] = await query<any[]>(
+    `SELECT id, name, project_type, user_id
+     FROM projects
+     WHERE id = ?`,
+    [projectId]
+  );
+  return project;
+}
+
 export async function getAuthenticatedUser() {
   const cookieStore = await cookies();
   const session = await getIronSession<SessionData>(cookieStore, sessionOptions);
@@ -28,7 +46,7 @@ export async function requireAuth(): Promise<
 export async function verifyLocalProjectAccess(
   userId: string,
   projectId: string
-): Promise<{ project: any; error?: never } | { project?: never; error: NextResponse }> {
+): Promise<AccessResult> {
   const result = await verifyProjectOwnership(userId, projectId);
   if (result.error) return result;
 
@@ -43,7 +61,7 @@ export async function verifyInstallationOwnership(
   installationId: string
 ): Promise<boolean> {
   const [result] = await query<any[]>(
-    `SELECT id FROM github_installations 
+    `SELECT id FROM github_installations
      WHERE id = ? AND user_id = ?`,
     [installationId, userId]
   );
@@ -54,38 +72,22 @@ export async function verifyInstallationOwnership(
 export async function verifyProjectOwnership(
   userId: string,
   projectId: string
-): Promise<{ project: any; error?: never } | { project?: never; error: NextResponse }> {
-  const [project] = await query<any[]>(
-    `SELECT id, name, project_type, user_id
-     FROM projects
-     WHERE id = ?`,
-    [projectId]
-  );
+): Promise<AccessResult> {
+  const project = await fetchLocalProject(projectId);
 
-  if (!project) {
-    return { error: NextResponse.json({ error: 'Project not found' }, { status: 404 }) };
-  }
-  if (project.user_id !== userId) {
-    return { error: NextResponse.json({ error: 'Forbidden: You do not own this project' }, { status: 403 }) };
-  }
+  if (!project) return { error: projectNotFound() };
+  if (project.user_id !== userId) return { error: projectForbidden() };
   return { project };
 }
 
 export async function verifyAnyProjectAccess(
   userId: string,
   projectId: string
-): Promise<{ project: any; error?: never } | { project?: never; error: NextResponse }> {
-  const [localProject] = await query<any[]>(
-    `SELECT id, name, project_type, user_id
-     FROM projects
-     WHERE id = ?`,
-    [projectId]
-  );
+): Promise<AccessResult> {
+  const localProject = await fetchLocalProject(projectId);
 
   if (localProject) {
-    if (localProject.user_id !== userId) {
-      return { error: NextResponse.json({ error: 'Forbidden: You do not own this project' }, { status: 403 }) };
-    }
+    if (localProject.user_id !== userId) return { error: projectForbidden() };
     return { project: localProject };
   }
 
@@ -97,12 +99,8 @@ export async function verifyAnyProjectAccess(
     [projectId]
   );
 
-  if (!ghRepo) {
-    return { error: NextResponse.json({ error: 'Project not found' }, { status: 404 }) };
-  }
-  if (ghRepo.user_id !== userId) {
-    return { error: NextResponse.json({ error: 'Forbidden: You do not own this project' }, { status: 403 }) };
-  }
+  if (!ghRepo) return { error: projectNotFound() };
+  if (ghRepo.user_id !== userId) return { error: projectForbidden() };
   return { project: { id: ghRepo.id, name: ghRepo.full_name, project_type: 'github', user_id: ghRepo.user_id } };
 }
 

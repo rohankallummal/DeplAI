@@ -43,7 +43,7 @@ function DiffView({ diff, footer }: { diff: DiffPreview; footer?: React.ReactNod
   const allLines = hunks.flatMap(h => h.lines);
   const added = allLines.filter(l => l.type === 'add').length;
   const removed = allLines.filter(l => l.type === 'del').length;
-  const displayPath = diff.file_path.replace(/^\/workspace\/codebase\/(edited\/)?/, '');
+  const displayPath = diff.file_path.replace(/^\/workspace\/codebase\/[^/]+\/(edited\/)?/, '');
 
   return (
     <div className="my-2 rounded-xl overflow-hidden border border-border bg-white dark:bg-[#161616]">
@@ -282,7 +282,9 @@ export default function ChatInterface({
           ) : (
             <div className="w-full space-y-5 self-start pt-0 pb-4">
               {(() => {
-                const firstDiffIndex = messages.findIndex(m => m.type === 'diff');
+                const firstPendingDiffId = messages.find(
+                  m => m.type === 'diff' && m.diff?.status === 'pending'
+                )?.id;
                 return messages.map((msg, msgIndex) => {
                 if (msg.role === 'user') {
                   return (
@@ -305,7 +307,7 @@ export default function ChatInterface({
                       {msg.diff.status === 'approved' ? 'Approved' : 'Rejected'}
                     </span>
                   );
-                  const showAutoApprovePrompt = msgIndex === firstDiffIndex && !autoApprove;
+                  const showAutoApprovePrompt = msg.id === firstPendingDiffId && !autoApprove;
                   return (
                     <div key={msg.id} className="pl-7">
                       <DiffView diff={msg.diff} footer={footer} />
@@ -374,14 +376,16 @@ export default function ChatInterface({
       </div>
 
       {messages.length > 0 && (
-        <div className="px-6 pb-6 pt-2 max-w-3xl mx-auto w-full">
-          <ChatInput
-            input={input}
-            onChange={setInput}
-            onKeyDown={handleKeyDown}
-            onSend={handleSend}
-            canSend={canSend}
-          />
+        <div className="px-6 pb-6 pt-2">
+          <div className="max-w-3xl mx-auto w-full">
+            <ChatInput
+              input={input}
+              onChange={setInput}
+              onKeyDown={handleKeyDown}
+              onSend={handleSend}
+              canSend={canSend}
+            />
+          </div>
         </div>
       )}
     </div>

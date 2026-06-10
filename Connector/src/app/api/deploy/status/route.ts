@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/auth';
-import { DEPLOY_URL, deployHeaders } from '@/lib/deploy';
+import { DEPLOY_URL, deployHeaders, logDeployError, isConnectionRefused, deployUnavailableResponse } from '@/lib/deploy';
 
 export async function GET(request: NextRequest) {
   try {
@@ -23,7 +23,8 @@ export async function GET(request: NextRequest) {
     const data = await response.json();
     return NextResponse.json(data);
   } catch (err: any) {
-    console.error('Deploy status error:', err);
+    logDeployError('Deploy status', err);
+    if (isConnectionRefused(err)) return deployUnavailableResponse();
     return NextResponse.json(
       { error: 'Failed to get deploy status' },
       { status: 500 }

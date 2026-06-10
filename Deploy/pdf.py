@@ -15,17 +15,21 @@ logger = logging.getLogger(__name__)
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 
-def _fmt_money(value, fraction_digits: int = 2) -> str:
+def _safe_float(value) -> Optional[float]:
     try:
-        return f"{float(value):,.{fraction_digits}f}"
+        return float(value)
     except (TypeError, ValueError):
-        return "0.00"
+        return None
+
+
+def _fmt_money(value, fraction_digits: int = 2) -> str:
+    f = _safe_float(value)
+    return f"{f:,.{fraction_digits}f}" if f is not None else "0.00"
 
 
 def _fmt_qty(value) -> str:
-    try:
-        f = float(value)
-    except (TypeError, ValueError):
+    f = _safe_float(value)
+    if f is None:
         return "—"
     if f == 0:
         return "0"
@@ -38,9 +42,8 @@ def _fmt_qty(value) -> str:
 
 
 def _fmt_unit_price(value) -> str:
-    try:
-        f = float(value)
-    except (TypeError, ValueError):
+    f = _safe_float(value)
+    if f is None:
         return "—"
     if f == 0:
         return "0"
@@ -123,13 +126,10 @@ def _build_full_context(raw_data: dict, project_name: str) -> dict:
             "resources": resources,
         })
 
-    max_cost = 0.0
-    for p in projects:
-        for r in p["resources"]:
-            if r["monthly_cost"] > max_cost:
-                max_cost = r["monthly_cost"]
-    if max_cost == 0:
-        max_cost = 1
+    max_cost = max(
+        (r["monthly_cost"] for p in projects for r in p["resources"]),
+        default=0.0,
+    ) or 1
 
     raw_summary = raw_data.get("summary") or {}
     summary = {
@@ -143,14 +143,15 @@ def _build_full_context(raw_data: dict, project_name: str) -> dict:
     unsupported = _flatten_type_counts(raw_summary.get("unsupportedResourceCounts"))
     no_price = _flatten_type_counts(raw_summary.get("noPriceResourceCounts"))
 
+    generated_on = None
     time_generated = raw_data.get("timeGenerated")
     if time_generated:
         try:
             ts = datetime.fromisoformat(time_generated.replace("Z", "+00:00"))
             generated_on = ts.strftime("%Y-%m-%d %H:%M UTC")
         except ValueError:
-            generated_on = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    else:
+            pass
+    if not generated_on:
         generated_on = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
     return {

@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
 
 import argparse
+import json
 import sys
 import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils import get_docker_client, run_container_sync, CODEBASE_VOLUME, AGENT_ARTIFACTS_VOLUME
+from scans.result_parser import _parse_bearer_report, _parse_grype_report
 
 ARTIFACT_VOLUMES = {AGENT_ARTIFACTS_VOLUME: {"bind": "/vol", "mode": "rw"}}
+
+WORKSPACE_PATH = "/workspace"
 
 
 def _ensure_cycle_dir(cycle_num: int) -> str:
@@ -64,6 +68,42 @@ def run_cycle_grype(project_name: str, project_id: str, cycle_num: int) -> tuple
     )
 
 
+def _read_text(path: str) -> str | None:
+    try:
+        with open(path) as f:
+            return f.read()
+    except FileNotFoundError:
+        return None
+
+
+def _safe_parse(fn, raw: str | None) -> list:
+    if not raw:
+        return []
+    try:
+        return fn(raw)
+    except Exception as e:
+        print(f"[!] Parse failed: {e}")
+        return []
+
+
+def write_condensed_scan_data(cycle_num: int) -> str:
+    cycle_dir = f"{WORKSPACE_PATH}/security/cycle{cycle_num}"
+    bearer_raw = _read_text(f"{cycle_dir}/bearer.json")
+    grype_raw = _read_text(f"{cycle_dir}/grype.json")
+
+    scan_data = {
+        "supply_chain": _safe_parse(_parse_grype_report, grype_raw),
+        "code_security": _safe_parse(
+            lambda r: _parse_bearer_report(r, include_docs=False), bearer_raw
+        ),
+    }
+
+    output_path = f"{cycle_dir}/scan_data.json"
+    with open(output_path, "w") as f:
+        json.dump(scan_data, f, indent=2)
+    return output_path
+
+
 def run_all_scanners(project_name: str, project_id: str, cycle_num: int) -> bool:
     print(f"[*] Running Bearer scan for cycle {cycle_num}...")
     ok_bearer, err_bearer = run_cycle_bearer(project_name, project_id, cycle_num)
@@ -80,6 +120,8 @@ def run_all_scanners(project_name: str, project_id: str, cycle_num: int) -> bool
         print(f"[!] Grype scan failed: {err_grype}")
 
     if ok_bearer or ok_grype:
+        output_path = write_condensed_scan_data(cycle_num)
+        print(f"[+] Wrote condensed scan data to {output_path}")
         print(f"[+] Scanners completed for cycle {cycle_num}")
         return True
 

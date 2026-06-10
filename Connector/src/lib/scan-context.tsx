@@ -58,6 +58,8 @@ interface ScanContextValue {
 
 const ScanContext = createContext<ScanContextValue | null>(null);
 
+const FORWARDED_STATUSES = new Set<OperationState>(['running', 'completed', 'error']);
+
 export function useScan() {
   const context = useContext(ScanContext);
   if (!context) {
@@ -92,7 +94,7 @@ function connectWebSocket(
         }
         break;
       case 'status':
-        if (['running', 'completed', 'error'].includes(data.status)) {
+        if (FORWARDED_STATUSES.has(data.status)) {
           onStatus(projectId, data.status);
         }
         break;

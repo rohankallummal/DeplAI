@@ -23,7 +23,7 @@ class CustomizeValidationResponse(BaseModel):
 
 
 class WebSocketCommand(BaseModel):
-    action: Literal["start", "chat", "diff_response", "save", "discard"]
+    action: Literal["start", "chat", "diff_response"]
     data: Optional[dict] = None
 
 

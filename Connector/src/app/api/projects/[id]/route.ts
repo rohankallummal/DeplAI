@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth, verifyLocalProjectAccess } from '@/lib/auth';
 import { query } from '@/lib/db';
 import { deleteProject } from '@/lib/local-projects';
-import { SECURITY_URL, securityHeaders } from '@/lib/security';
+import { SECURITY_URL, securityHeaders, logSecurityError } from '@/lib/security';
 
 
 export async function DELETE(
@@ -39,7 +39,7 @@ export async function DELETE(
         console.error('Scan report cleanup returned', cleanupRes.status);
       }
     } catch (cleanupError) {
-      console.error('Scan report cleanup failed (non-fatal):', cleanupError);
+      logSecurityError('Scan report cleanup (non-fatal)', cleanupError);
     }
 
     return NextResponse.json({

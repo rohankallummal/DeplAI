@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/auth';
-import { DEPLOY_URL, deployHeaders } from '@/lib/deploy';
+import { DEPLOY_URL, deployHeaders, logDeployError, isConnectionRefused, deployUnavailableResponse } from '@/lib/deploy';
 
 export async function GET(
   _request: NextRequest,
@@ -35,7 +35,8 @@ export async function GET(
       },
     });
   } catch (err) {
-    console.error('Cost PDF proxy error:', err);
+    logDeployError('Cost PDF proxy', err);
+    if (isConnectionRefused(err)) return deployUnavailableResponse();
     return NextResponse.json({ error: 'Failed to get cost PDF' }, { status: 500 });
   }
 }

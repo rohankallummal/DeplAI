@@ -118,19 +118,20 @@ export function DeployProvider({ children }: { children: React.ReactNode }) {
     return states[projectId] || { ...DEFAULT_STATE };
   }, [states]);
 
-  const activeDeployIds = useMemo(() => {
-    return Object.entries(states)
-      .filter(([, s]) => ACTIVE_PHASES.includes(s.phase))
-      .map(([id]) => id);
-  }, [states]);
+  const activeEntries = useMemo(
+    () => Object.entries(states).filter(([, s]) => ACTIVE_PHASES.includes(s.phase)),
+    [states]
+  );
 
-  const activeDeployProjectNames = useMemo(() => {
-    return Object.fromEntries(
-      Object.entries(states)
-        .filter(([, s]) => ACTIVE_PHASES.includes(s.phase))
-        .map(([id, s]) => [id, s.projectName])
-    );
-  }, [states]);
+  const activeDeployIds = useMemo(
+    () => activeEntries.map(([id]) => id),
+    [activeEntries]
+  );
+
+  const activeDeployProjectNames = useMemo(
+    () => Object.fromEntries(activeEntries.map(([id, s]) => [id, s.projectName])),
+    [activeEntries]
+  );
 
   function createWsMessageHandler(projectId: string) {
     return (event: MessageEvent) => {

@@ -6,6 +6,11 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+)
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Header, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from models import (
@@ -55,6 +60,8 @@ scan_contexts: dict[str, ScanValidationRequest] = {}
 active_remediations: dict[str, RemediationRunner] = {}
 remediation_contexts: dict[str, ScanValidationRequest] = {}
 remediation_statuses: dict[str, str] = {}
+
+_cleanup_lock = asyncio.Lock()
 
 
 async def _handle_websocket(
@@ -218,18 +225,24 @@ async def websocket_remediate(websocket: WebSocket, project_id: str):
     )
 
 
+def _op_active(runner) -> dict | None:
+    if runner is None:
+        return None
+    return {"active": runner.status == "running"}
+
+
+def _require_publish_token(user_id: str) -> str:
+    token = publish_tokens.get_token(user_id)
+    if not token:
+        raise HTTPException(status_code=401, detail="GitHub authorization required")
+    return token
+
+
 @app.get("/api/operations/status/{project_id}", dependencies=[Depends(verify_api_key)])
 async def operation_status(project_id: str):
-    scan_runner = active_scans.get(project_id)
-    rem_runner = active_remediations.get(project_id)
-
     return {
-        "scan": {
-            "active": scan_runner is not None and scan_runner.status == "running",
-        } if scan_runner else None,
-        "remediation": {
-            "active": rem_runner is not None and rem_runner.status == "running",
-        } if rem_runner else None,
+        "scan": _op_active(active_scans.get(project_id)),
+        "remediation": _op_active(active_remediations.get(project_id)),
         "remediation_status": remediation_statuses.get(project_id),
     }
 
@@ -252,9 +265,7 @@ async def check_publish_token(user_id: str):
 
 @app.post("/api/publish/create-repo", response_model=PublishResponse, dependencies=[Depends(verify_api_key)])
 async def publish_create_repo(request: CreateRepoRequest):
-    token = publish_tokens.get_token(request.user_id)
-    if not token:
-        raise HTTPException(status_code=401, detail="GitHub authorization required")
+    token = _require_publish_token(request.user_id)
 
     success, message, url = await asyncio.to_thread(
         create_repo,
@@ -270,9 +281,7 @@ async def publish_create_repo(request: CreateRepoRequest):
 
 @app.post("/api/publish/create-pr", response_model=PublishResponse, dependencies=[Depends(verify_api_key)])
 async def publish_create_pr(request: CreatePRRequest):
-    token = publish_tokens.get_token(request.user_id)
-    if not token:
-        raise HTTPException(status_code=401, detail="GitHub authorization required")
+    token = _require_publish_token(request.user_id)
 
     success, message, url = await asyncio.to_thread(
         create_pr,
@@ -289,17 +298,27 @@ async def publish_create_pr(request: CreatePRRequest):
 
 @app.post("/api/cleanup", dependencies=[Depends(verify_api_key)])
 async def cleanup():
-    await asyncio.to_thread(remove_remediation_container)
-    success, error_msg = await asyncio.to_thread(cleanup_volumes)
-    if not success:
-        raise HTTPException(status_code=500, detail=f"Cleanup failed: {error_msg}")
-    scan_contexts.clear()
-    remediation_contexts.clear()
-    remediation_statuses.clear()
-    publish_tokens.clear_all()
-    reset_last_project()
-    clear_cache()
-    return {"success": True, "message": "Docker volumes removed successfully"}
+    async with _cleanup_lock:
+        for runner in list(active_scans.values()):
+            runner.cancel()
+        for runner in list(active_remediations.values()):
+            runner.cancel()
+        active_scans.clear()
+        active_remediations.clear()
+
+        await asyncio.to_thread(remove_remediation_container)
+
+        success, error_msg = await asyncio.to_thread(cleanup_volumes)
+        if not success:
+            raise HTTPException(status_code=500, detail=f"Cleanup failed: {error_msg}")
+
+        scan_contexts.clear()
+        remediation_contexts.clear()
+        remediation_statuses.clear()
+        publish_tokens.clear_all()
+        reset_last_project()
+        clear_cache()
+        return {"success": True, "message": "Docker volumes removed successfully"}
 
 
 @app.get("/health")

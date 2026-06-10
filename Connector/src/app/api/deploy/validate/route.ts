@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth, verifyAnyProjectAccess } from '@/lib/auth';
 import { githubService } from '@/lib/github';
-import { DEPLOY_URL, deployHeaders } from '@/lib/deploy';
+import { DEPLOY_URL, deployHeaders, logDeployError, isConnectionRefused, deployUnavailableResponse } from '@/lib/deploy';
 
 export async function POST(request: NextRequest) {
   try {
@@ -55,7 +55,8 @@ export async function POST(request: NextRequest) {
     const data = await response.json();
     return NextResponse.json(data);
   } catch (err: any) {
-    console.error('Deploy validation error:', err);
+    logDeployError('Deploy', err);
+    if (isConnectionRefused(err)) return deployUnavailableResponse();
     return NextResponse.json(
       { error: 'Failed to validate deploy' },
       { status: 500 }

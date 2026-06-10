@@ -12,7 +12,7 @@ from models import (
     WebSocketCommand,
 )
 from runner import CustomizationRunner
-from utils import remove_customize_container, cleanup_volumes, clear_customize_artifacts
+from utils import remove_customize_container, cleanup_volumes
 
 load_dotenv()
 
@@ -37,7 +37,6 @@ app.add_middleware(
 
 customize_contexts: dict[str, CustomizeValidationRequest] = {}
 active_customizations: dict[str, CustomizationRunner] = {}
-_last_project_id: str | None = None
 
 ACTIVE_STATUSES = frozenset({"running", "executing", "waiting_diff", "building", "build_fixing", "saving"})
 
@@ -77,12 +76,11 @@ async def websocket_customize(websocket: WebSocket, project_id: str, token: str 
             cmd = WebSocketCommand.model_validate_json(raw)
 
             if cmd.action == "start":
-                runner = active_customizations.get(project_id)
-                if runner and runner.status in ACTIVE_STATUSES:
-                    logger.info("Reattaching to active customization for %s", project_id)
-                    await runner.attach(websocket)
-                    local_runner = runner
-                    continue
+                # Each open is a brand-new session: tear down any prior runner for
+                # this project and start fresh — no reattach, no prior chat history.
+                old_runner = active_customizations.pop(project_id, None)
+                if old_runner:
+                    old_runner.cancel()
 
                 context = customize_contexts.get(project_id)
                 if not context:
@@ -94,39 +92,25 @@ async def websocket_customize(websocket: WebSocket, project_id: str, token: str 
                 local_runner = runner
 
                 async def run_workflow(r: CustomizationRunner, pid: str):
-                    global _last_project_id
                     try:
-                        if _last_project_id is not None and _last_project_id != pid:
-                            await asyncio.to_thread(clear_customize_artifacts)
-                        _last_project_id = pid
                         await r.run()
                     except Exception as e:
                         logger.error("Customize workflow failed for %s: %s", pid, e, exc_info=True)
 
                 asyncio.create_task(run_workflow(runner, project_id))
 
-            elif cmd.action == "chat":
+            else:
                 runner = local_runner or active_customizations.get(project_id)
-                if runner and cmd.data:
-                    await runner.receive_chat_message(cmd.data.get("message", ""))
+                if not runner:
+                    continue
 
-            elif cmd.action == "diff_response":
-                runner = local_runner or active_customizations.get(project_id)
-                if runner and cmd.data:
+                if cmd.action == "chat" and cmd.data:
+                    await runner.receive_chat_message(cmd.data.get("message", ""))
+                elif cmd.action == "diff_response" and cmd.data:
                     await runner.receive_diff_response(
                         cmd.data.get("diff_id", ""),
                         cmd.data.get("approved", False),
                     )
-
-            elif cmd.action == "save":
-                runner = local_runner or active_customizations.get(project_id)
-                if runner:
-                    await runner.save_changes()
-
-            elif cmd.action == "discard":
-                runner = local_runner or active_customizations.get(project_id)
-                if runner:
-                    await runner.discard_changes()
 
     except (WebSocketDisconnect, RuntimeError):
         logger.info("WebSocket disconnected for project %s", project_id)
@@ -159,8 +143,6 @@ async def save_project(project_id: str):
 
 @app.post("/api/cleanup", dependencies=[Depends(verify_api_key)])
 async def cleanup(request: Request):
-    global _last_project_id
-
     body: dict = {}
     try:
         body = await request.json()
@@ -169,18 +151,22 @@ async def cleanup(request: Request):
 
     project_id = body.get("project_id")
 
+    # Per-project teardown (chat close / discard): kill the runner, agent, and
+    # daemon and clear the ephemeral work/ directory. With discard set, the
+    # project's files are deleted too; every other project is left untouched.
     if project_id:
+        discard = bool(body.get("discard", False))
         runner = active_customizations.pop(project_id, None)
         if runner:
-            runner.cancel()
+            await runner.teardown(discard=discard)
         customize_contexts.pop(project_id, None)
-        return {"success": True, "message": "Session cleanup completed"}
+        return {"success": True, "message": "Session closed"}
 
+    # Full cleanup (logout): tear down every session and remove the container + volume.
     for runner in active_customizations.values():
         runner.cancel()
     customize_contexts.clear()
     active_customizations.clear()
-    _last_project_id = None
 
     await asyncio.to_thread(remove_customize_container)
 

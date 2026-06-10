@@ -13,7 +13,11 @@ def _emit_result(success: bool, phase: str):
     print(json.dumps({"type": "result", "data": {"success": success, "phase": phase}}), flush=True)
 
 
-async def run_analyze(project_name: str, project_id: str):
+def _state_key(project_id: str, project_name: str, user_id: str) -> str:
+    return f"{project_id}_{project_name}_{user_id}".replace(" ", "_").replace("-", "_")
+
+
+async def run_analyze():
     from agent.analyzer import run
 
     await _on_message("phase", "Analyzing repository structure")
@@ -26,14 +30,16 @@ async def run_analyze(project_name: str, project_id: str):
     _emit_result(success, "analyze")
 
 
-async def run_clarify(project_name: str, project_id: str):
+async def run_clarify():
     from agent.clarify import run
 
     await _on_message("phase", "Generating clarification questions")
     deploy_path = "/workspace/deploy"
     success = await run(deploy_path)
 
-    if success:
+    if not success:
+        await _on_message("error", "Failed to generate clarification questions")
+    else:
         try:
             with open(f"{deploy_path}/questions.json") as f:
                 questions = json.load(f)
@@ -42,44 +48,41 @@ async def run_clarify(project_name: str, project_id: str):
         except Exception as e:
             await _on_message("error", f"Failed to read questions: {e}")
             success = False
-    else:
-        await _on_message("error", "Failed to generate clarification questions")
     _emit_result(success, "clarify")
 
 
-async def run_terraform(project_name: str, project_id: str, user_id: str):
+async def _run_terraform_phase(project_name: str, project_id: str, user_id: str, tf_phase: str, phase_msg: str, success_msg: str, error_prefix: str, result_phase: str):
     from agent.terraform import run
 
-    await _on_message("phase", "Generating Terraform code and running plan")
-    state_key = f"{project_id}_{project_name}_{user_id}".replace(" ", "_").replace("-", "_")
-    result = await run("/workspace/deploy", state_key, phase="plan")
+    await _on_message("phase", phase_msg)
+    result = await run("/workspace/deploy", _state_key(project_id, project_name, user_id), phase=tf_phase)
 
     if result.success:
-        await _on_message("success", "Terraform configuration generated and plan succeeded")
+        await _on_message("success", success_msg)
     else:
-        await _on_message("error", f"Terraform generation/planning failed: {result.error}")
-    _emit_result(result.success, "terraform")
-
-
-async def run_terraform_apply(project_name: str, project_id: str, user_id: str):
-    from agent.terraform import run
-
-    await _on_message("phase", "Applying Terraform infrastructure")
-    state_key = f"{project_id}_{project_name}_{user_id}".replace(" ", "_").replace("-", "_")
-    result = await run("/workspace/deploy", state_key, phase="apply")
-
-    if result.success:
-        await _on_message("success", "Terraform apply succeeded — infrastructure provisioned")
-    else:
-        await _on_message("error", f"Terraform apply failed: {result.error}")
-    _emit_result(result.success, "terraform_apply")
+        await _on_message("error", f"{error_prefix}: {result.error}")
+    _emit_result(result.success, result_phase)
 
 
 PHASE_RUNNERS = {
-    "analyze": lambda args: run_analyze(args.project_name, args.project_id),
-    "clarify": lambda args: run_clarify(args.project_name, args.project_id),
-    "terraform": lambda args: run_terraform(args.project_name, args.project_id, args.user_id),
-    "terraform_apply": lambda args: run_terraform_apply(args.project_name, args.project_id, args.user_id),
+    "analyze": lambda args: run_analyze(),
+    "clarify": lambda args: run_clarify(),
+    "terraform": lambda args: _run_terraform_phase(
+        args.project_name, args.project_id, args.user_id,
+        tf_phase="plan",
+        phase_msg="Generating Terraform code and running plan",
+        success_msg="Terraform configuration generated and plan succeeded",
+        error_prefix="Terraform generation/planning failed",
+        result_phase="terraform",
+    ),
+    "terraform_apply": lambda args: _run_terraform_phase(
+        args.project_name, args.project_id, args.user_id,
+        tf_phase="apply",
+        phase_msg="Applying Terraform infrastructure",
+        success_msg="Terraform apply succeeded — infrastructure provisioned",
+        error_prefix="Terraform apply failed",
+        result_phase="terraform_apply",
+    ),
 }
 
 

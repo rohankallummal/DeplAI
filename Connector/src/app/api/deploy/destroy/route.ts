@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { Agent } from 'undici';
 import { requireAuth, verifyAnyProjectAccess } from '@/lib/auth';
-import { DEPLOY_URL, deployHeaders } from '@/lib/deploy';
+import { DEPLOY_URL, deployHeaders, logDeployError, isConnectionRefused, deployUnavailableResponse } from '@/lib/deploy';
 
 export const maxDuration = 1800;
 
@@ -41,7 +41,8 @@ export async function POST(request: NextRequest) {
     const data = await response.json();
     return NextResponse.json(data);
   } catch (err: any) {
-    console.error('Deploy destroy error:', err);
+    logDeployError('Deploy destroy', err);
+    if (isConnectionRefused(err)) return deployUnavailableResponse();
     return NextResponse.json(
       { error: 'Failed to destroy deployment' },
       { status: 500 }

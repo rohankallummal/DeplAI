@@ -51,9 +51,8 @@ interface CustomizeContextValue {
   getCustomizeState: (projectId: string) => ProjectCustomizeState;
   sendChatMessage: (projectId: string, message: string) => void;
   respondToDiff: (projectId: string, diffId: string, approved: boolean) => void;
-  saveChanges: (projectId: string) => void;
-  discardChanges: (projectId: string) => void;
   resetCustomize: (projectId: string) => void;
+  closeCustomize: (projectId: string, discard?: boolean) => Promise<void>;
 }
 
 const CustomizeContext = createContext<CustomizeContextValue | null>(null);
@@ -104,20 +103,23 @@ export function CustomizeProvider({ children }: { children: React.ReactNode }) {
     return states[pid] ?? { ...DEFAULT_STATE };
   }
 
-  function addChatMessage(projectId: string, msg: Omit<ChatMessage, 'id' | 'timestamp'>) {
+  function updateProject(
+    projectId: string,
+    patch: (s: ProjectCustomizeState) => Partial<ProjectCustomizeState>,
+  ) {
     setStates(prev => {
       const existing = getOrDefault(prev, projectId);
-      return {
-        ...prev,
-        [projectId]: {
-          ...existing,
-          chatMessages: [
-            ...existing.chatMessages,
-            { ...msg, id: genId(), timestamp: new Date().toISOString() },
-          ],
-        },
-      };
+      return { ...prev, [projectId]: { ...existing, ...patch(existing) } };
     });
+  }
+
+  function addChatMessage(projectId: string, msg: Omit<ChatMessage, 'id' | 'timestamp'>) {
+    updateProject(projectId, existing => ({
+      chatMessages: [
+        ...existing.chatMessages,
+        { ...msg, id: genId(), timestamp: new Date().toISOString() },
+      ],
+    }));
   }
 
   function createWsMessageHandler(projectId: string) {
@@ -127,10 +129,7 @@ export function CustomizeProvider({ children }: { children: React.ReactNode }) {
       switch (data.type) {
         case 'status': {
           const phase = STATUS_MAP[data.status] || 'error';
-          setStates(prev => ({
-            ...prev,
-            [projectId]: { ...getOrDefault(prev, projectId), phase },
-          }));
+          updateProject(projectId, () => ({ phase }));
           break;
         }
 
@@ -148,14 +147,7 @@ export function CustomizeProvider({ children }: { children: React.ReactNode }) {
 
         case 'diff_preview': {
           const diff: DiffPreview = { ...data.data, status: 'pending' };
-          setStates(prev => ({
-            ...prev,
-            [projectId]: {
-              ...getOrDefault(prev, projectId),
-              currentDiff: diff,
-              phase: 'waiting_diff',
-            },
-          }));
+          updateProject(projectId, () => ({ currentDiff: diff, phase: 'waiting_diff' }));
           addChatMessage(projectId, {
             role: 'agent',
             type: 'diff',
@@ -166,21 +158,25 @@ export function CustomizeProvider({ children }: { children: React.ReactNode }) {
 
         case 'builder_status': {
           const bStatus = data.data?.status || 'idle';
-          setStates(prev => ({
-            ...prev,
-            [projectId]: { ...getOrDefault(prev, projectId), builderStatus: bStatus },
-          }));
+          if (bStatus === 'passed' || bStatus === 'failed') {
+            updateProject(projectId, () => ({ builderStatus: 'idle' }));
+            addChatMessage(projectId, {
+              role: 'agent',
+              type: 'text',
+              content: bStatus === 'passed'
+                ? 'All changes have been implemented'
+                : 'Build has unresolved issues',
+            });
+          } else {
+            updateProject(projectId, () => ({ builderStatus: bStatus }));
+          }
           break;
         }
 
         case 'result': {
-          setStates(prev => ({
-            ...prev,
-            [projectId]: {
-              ...getOrDefault(prev, projectId),
-              phase: 'completed',
-              changesMade: data.data?.changes_made || false,
-            },
+          updateProject(projectId, () => ({
+            phase: 'completed',
+            changesMade: data.data?.changes_made || false,
           }));
           if (!data.data?.changes_made) {
             addChatMessage(projectId, {
@@ -193,13 +189,7 @@ export function CustomizeProvider({ children }: { children: React.ReactNode }) {
         }
 
         case 'save_result': {
-          setStates(prev => ({
-            ...prev,
-            [projectId]: {
-              ...getOrDefault(prev, projectId),
-              saveResult: data.data,
-            },
-          }));
+          updateProject(projectId, () => ({ saveResult: data.data }));
           addChatMessage(projectId, {
             role: 'agent',
             type: 'save_result',
@@ -290,41 +280,20 @@ export function CustomizeProvider({ children }: { children: React.ReactNode }) {
     const ws = wsRefs.current[projectId];
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
 
-    setStates(prev => {
-      const existing = getOrDefault(prev, projectId);
-      return {
-        ...prev,
-        [projectId]: {
-          ...existing,
-          currentDiff: null,
-          changesMade: existing.changesMade || approved,
-          chatMessages: existing.chatMessages.map(msg =>
-            msg.type === 'diff' && msg.diff?.diff_id === diffId
-              ? { ...msg, diff: { ...msg.diff!, status: approved ? 'approved' as const : 'rejected' as const } }
-              : msg
-          ),
-        },
-      };
-    });
+    updateProject(projectId, existing => ({
+      currentDiff: null,
+      changesMade: existing.changesMade || approved,
+      chatMessages: existing.chatMessages.map(msg =>
+        msg.type === 'diff' && msg.diff?.diff_id === diffId
+          ? { ...msg, diff: { ...msg.diff!, status: approved ? 'approved' as const : 'rejected' as const } }
+          : msg
+      ),
+    }));
 
     ws.send(JSON.stringify({
       action: 'diff_response',
       data: { diff_id: diffId, approved },
     }));
-  }, []);
-
-  const saveChanges = useCallback((projectId: string) => {
-    const ws = wsRefs.current[projectId];
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-
-    ws.send(JSON.stringify({ action: 'save' }));
-  }, []);
-
-  const discardChanges = useCallback((projectId: string) => {
-    const ws = wsRefs.current[projectId];
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-
-    ws.send(JSON.stringify({ action: 'discard' }));
   }, []);
 
   const resetCustomize = useCallback((projectId: string) => {
@@ -337,15 +306,31 @@ export function CustomizeProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
+  // Closing the chat resets local state and fully tears down the backend session
+  // (runner, agent, daemon, work/). With discard=true the project's edited files
+  // are deleted too; otherwise they persist so a later reopen resumes from the
+  // last edits.
+  const closeCustomize = useCallback(async (projectId: string, discard = false) => {
+    resetCustomize(projectId);
+    try {
+      await fetch('/api/customize/cleanup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ project_id: projectId, discard }),
+      });
+    } catch {
+      // best-effort teardown; the next open re-validates and starts fresh
+    }
+  }, [resetCustomize]);
+
   const value = useMemo<CustomizeContextValue>(() => ({
     startCustomize,
     getCustomizeState,
     sendChatMessage,
     respondToDiff,
-    saveChanges,
-    discardChanges,
     resetCustomize,
-  }), [startCustomize, getCustomizeState, sendChatMessage, respondToDiff, saveChanges, discardChanges, resetCustomize]);
+    closeCustomize,
+  }), [startCustomize, getCustomizeState, sendChatMessage, respondToDiff, resetCustomize, closeCustomize]);
 
   return (
     <CustomizeContext.Provider value={value}>

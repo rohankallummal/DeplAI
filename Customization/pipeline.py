@@ -14,7 +14,7 @@ def _emit_result(success: bool, phase: str, **extra):
     print(json.dumps({"type": "result", "data": data}), flush=True)
 
 
-async def run_execute(project_name: str, project_id: str, user_request: str, codebase_path: str):
+async def run_execute(codebase_path: str, user_request: str):
     from agent.styler import run
 
     _on_message("phase", "Executing changes")
@@ -31,7 +31,7 @@ async def run_execute(project_name: str, project_id: str, user_request: str, cod
     )
 
 
-async def run_build(project_name: str, project_id: str, codebase_path: str):
+async def run_build(codebase_path: str):
     from agent.builder import run
 
     _on_message("phase", "Running build verification")
@@ -45,8 +45,8 @@ async def run_build(project_name: str, project_id: str, codebase_path: str):
 
 
 PHASE_RUNNERS = {
-    "execute": lambda args: run_execute(args.project_name, args.project_id, args.user_request, args.codebase_path),
-    "build": lambda args: run_build(args.project_name, args.project_id, args.codebase_path),
+    "execute": lambda args: run_execute(args.codebase_path, args.user_request),
+    "build": lambda args: run_build(args.codebase_path),
 }
 
 

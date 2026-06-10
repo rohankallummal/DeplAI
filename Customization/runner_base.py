@@ -1,14 +1,11 @@
 import asyncio
 import logging
-from collections import deque
 
 from fastapi import WebSocket
 
 from models import StreamStatus, CustomizeMessage
 
 logger = logging.getLogger(__name__)
-
-MAX_RECENT_MESSAGES = 50
 
 
 class CancelledError(Exception):
@@ -23,28 +20,12 @@ class RunnerBase:
         self._message_index = 0
         self._total_steps = total_steps
         self.status: str = "idle"
-        self.recent_messages: deque[dict] = deque(maxlen=MAX_RECENT_MESSAGES)
 
     def cancel(self):
         self._cancelled = True
 
     def detach(self):
         self.websocket = None
-
-    async def attach(self, websocket: WebSocket):
-        self.websocket = websocket
-        for msg in self.recent_messages:
-            try:
-                await websocket.send_json(msg)
-            except Exception:
-                break
-        try:
-            await websocket.send_json({
-                "type": "status",
-                "status": self.status,
-            })
-        except Exception:
-            pass
 
     def _check_cancelled(self):
         if self._cancelled:
@@ -61,7 +42,6 @@ class RunnerBase:
         self._message_index += 1
         message = CustomizeMessage(index=self._message_index, total=self._total_steps, type=msg_type, content=content)
         payload = {"type": "message", "data": message.model_dump()}
-        self.recent_messages.append(payload)
         await self._try_send(payload)
 
     async def _send_status(self, status: StreamStatus):

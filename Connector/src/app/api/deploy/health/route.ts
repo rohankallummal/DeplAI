@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { DEPLOY_URL, deployHeaders } from '@/lib/deploy';
+import { DEPLOY_URL, deployHeaders, logDeployError } from '@/lib/deploy';
 
 export async function GET() {
   try {
@@ -13,6 +13,7 @@ export async function GET() {
 
     return NextResponse.json({ status: 'healthy' });
   } catch (err) {
+    logDeployError('Deploy health', err);
     return NextResponse.json({ error: 'Backend unavailable' }, { status: 503 });
   }
 }

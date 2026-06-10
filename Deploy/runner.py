@@ -81,15 +81,11 @@ class DeployRunner(RunnerBase):
         )
 
         firecrawl_key = os.environ.get("FIRECRAWL_API_KEY", "")
+        mcp_settings: dict = {"ackTos": True}
         if firecrawl_key:
-            mcp_settings = {
-                "ackTos": True,
-                "mcpServers": {
-                    "firecrawl": {"url": f"https://mcp.firecrawl.dev/{firecrawl_key}/v2/mcp"}
-                },
+            mcp_settings["mcpServers"] = {
+                "firecrawl": {"url": f"https://mcp.firecrawl.dev/{firecrawl_key}/v2/mcp"}
             }
-        else:
-            mcp_settings = {"ackTos": True}
         settings_b64 = base64.b64encode(json.dumps(mcp_settings).encode()).decode()
         await asyncio.to_thread(
             self._container.exec_run,
@@ -97,26 +93,17 @@ class DeployRunner(RunnerBase):
             user="root",
         )
 
-        exit_code, diag_output = await asyncio.to_thread(
-            self._container.exec_run,
-            ["claude", "--version"],
-            user="agent",
-            environment={"HOME": "/home/agent"},
+        claude_ok, claude_text = await self._run_version_check(
+            ["claude", "--version"], env={"HOME": "/home/agent"},
         )
-        diag_text = decode_output(diag_output).strip()
-        if exit_code != 0:
-            return await self._terminate(f"Claude CLI check failed (exit {exit_code}): {diag_text}")
-        logger.info(f"Claude CLI ready ({diag_text})")
+        if not claude_ok:
+            return await self._terminate(f"Claude CLI check failed: {claude_text}")
+        logger.info(f"Claude CLI ready ({claude_text})")
 
-        exit_code, tf_output = await asyncio.to_thread(
-            self._container.exec_run,
-            ["terraform", "--version"],
-            user="agent",
-        )
-        tf_text = decode_output(tf_output).strip()
-        if exit_code != 0:
-            return await self._terminate(f"Terraform CLI check failed (exit {exit_code}): {tf_text}")
-        logger.info(f"Terraform CLI ready ({tf_text.splitlines()[0]})")
+        tf_ok, tf_text = await self._run_version_check(["terraform", "--version"])
+        if not tf_ok:
+            return await self._terminate(f"Terraform CLI check failed: {tf_text}")
+        logger.info(f"Terraform CLI ready ({tf_text.splitlines()[0] if tf_text else ''})")
 
         mcp_ok = await self._check_mcp_connectivity()
         if not mcp_ok:
@@ -249,6 +236,18 @@ class DeployRunner(RunnerBase):
             pass
         except Exception as e:
             logger.error("MCP heartbeat crashed: %s", e, exc_info=True)
+
+    async def _run_version_check(self, cmd: list[str], env: dict | None = None) -> tuple[bool, str]:
+        exit_code, output = await asyncio.to_thread(
+            self._container.exec_run,
+            cmd,
+            user="agent",
+            environment=env or {},
+        )
+        text = decode_output(output).strip()
+        if exit_code != 0:
+            return False, f"(exit {exit_code}): {text}"
+        return True, text
 
     async def _check_mcp_connectivity(self) -> bool:
         firecrawl_key = os.environ.get("FIRECRAWL_API_KEY", "")

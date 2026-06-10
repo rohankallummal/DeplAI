@@ -34,8 +34,6 @@ export default function SecurityAnalysisPage() {
   const remediating = remediationState === 'running';
   const remediationDone = remediationState === 'completed';
 
-  usePageLoading(loading || !findingsLoaded);
-
   useEffect(() => {
     async function init() {
       await Promise.all([fetchProjectInfo(), restoreState(projectId)]);
@@ -160,6 +158,12 @@ export default function SecurityAnalysisPage() {
   } : null;
 
   const popupActive = popupScenario !== null;
+  const hideFindings =
+    popupScenario === 'local_remediated' ||
+    popupScenario === 'github_remediated' ||
+    popupScenario === 'published';
+
+  usePageLoading(loading || (!findingsLoaded && !hideFindings));
 
   function handlePopupClose() {
     if (activePopup === 'clean' || activePopup === 'published') {
@@ -200,11 +204,13 @@ export default function SecurityAnalysisPage() {
       </header>
 
       <div className="flex-1 flex flex-col min-h-0 relative">
-        <div className={`flex-1 min-h-0 flex flex-col container mx-auto px-6 py-4 transition-[filter] duration-200 ${popupActive && !monitorOpen ? 'blur-md pointer-events-none select-none' : ''}`}>
-          <div className="flex-1 min-h-0">
-            <Findings projectId={projectId} remediating={remediating} onCleanScan={handleCleanScan} onFindingsReady={setFindingsReady} onLoaded={() => setFindingsLoaded(true)} />
+        {!hideFindings && (
+          <div className={`flex-1 min-h-0 flex flex-col container mx-auto px-6 py-4 transition-[filter] duration-200 ${popupActive && !monitorOpen ? 'blur-md pointer-events-none select-none' : ''}`}>
+            <div className="flex-1 min-h-0">
+              <Findings projectId={projectId} remediating={remediating} onCleanScan={handleCleanScan} onFindingsReady={setFindingsReady} onLoaded={() => setFindingsLoaded(true)} />
+            </div>
           </div>
-        </div>
+        )}
 
         {popupActive && !monitorOpen && popupScenario && (
           <div className="absolute inset-0 z-40 flex items-center justify-center">

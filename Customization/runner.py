@@ -37,20 +37,28 @@ class CustomizationRunner(RunnerBase):
         self._diff_response_data: dict | None = None
 
         self._changes_made = False
-        self._agent_done = asyncio.Event()
+        self._iteration_changes_made = False
 
     @property
     def changes_made(self) -> bool:
         return self._changes_made
 
     @property
+    def _project_dir(self) -> str:
+        return f"/workspace/codebase/{self.project_id}"
+
+    @property
     def _codebase_path(self) -> str:
         if self.context.project_type == "github":
-            return "/workspace/codebase"
-        return "/workspace/codebase/edited"
+            return self._project_dir
+        return f"{self._project_dir}/edited"
 
     def cancel(self):
         super().cancel()
+        # Wake any parked waits so the workflow loop observes cancellation and
+        # unwinds instead of leaking a parked coroutine.
+        self._chat_event.set()
+        self._diff_response_event.set()
         if self._container:
             try:
                 self._container.exec_run(
@@ -95,13 +103,13 @@ class CustomizationRunner(RunnerBase):
         if self.context.project_type == "local":
             await asyncio.to_thread(
                 self._container.exec_run,
-                ["touch", "/workspace/codebase/.snapshot_marker"],
+                ["touch", f"{self._project_dir}/.snapshot_marker"],
                 user="agent",
             )
 
         await asyncio.to_thread(
             self._container.exec_run,
-            ["sh", "-c", "rm -rf /workspace/customize/* /workspace/customize/.[!.]* 2>/dev/null || true"],
+            ["sh", "-c", "mkdir -p /workspace/work && rm -rf /workspace/work/* /workspace/work/.[!.]* 2>/dev/null || true"],
             user="agent",
         )
 
@@ -130,46 +138,48 @@ class CustomizationRunner(RunnerBase):
             return await self._terminate("Something went wrong. Please try again.")
         logger.info(f"Claude CLI ready ({diag_text})")
 
-        await self._send_status(StreamStatus.running)
-        logger.info("Waiting for user customization request")
-        await self._chat_event.wait()
-        self._check_cancelled()
+        while True:
+            await self._send_status(StreamStatus.running)
+            logger.info("Waiting for user customization request")
+            await self._chat_event.wait()
+            self._check_cancelled()
 
-        if self._chat_message is None:
-            return await self._terminate("No customization request received")
+            prompt = self._chat_message
+            self._chat_event.clear()
+            self._chat_message = None
+            self._iteration_changes_made = False
 
-        await self._send_status(StreamStatus.executing)
-        logger.info("Starting styler agent")
+            if prompt is None:
+                continue
 
-        self._agent_done.clear()
-        execute_task = asyncio.create_task(self._run_agent_phase(
-            "execute",
-            extra_args=["--user-request", self._chat_message],
-        ))
-        monitor_task = asyncio.create_task(self._monitor_diffs())
+            await self._send_status(StreamStatus.executing)
+            logger.info("Starting styler agent")
 
-        execute_result = await execute_task
-        self._agent_done.set()
-        await monitor_task
+            execute_result = await self._run_agent_phase(
+                "execute",
+                extra_args=["--user-request", prompt],
+            )
+            await self._flush_remaining_edits()
 
-        if not execute_result or not execute_result.get("success"):
-            if self._changes_made:
-                logger.warning("Styler had errors but some changes were applied")
-            else:
-                return await self._terminate("Something went wrong. Please try again.")
+            if not execute_result or not execute_result.get("success"):
+                if self._iteration_changes_made:
+                    logger.warning("Styler had errors but some changes were applied this iteration")
+                else:
+                    logger.error("Styler failed; awaiting next user request")
+                    await self._try_send({"type": "error", "data": "Something went wrong. Please try again."})
+                    await self._send_status(StreamStatus.error)
+                    continue
 
-        if self._changes_made:
-            await self._run_builder()
+            if self._iteration_changes_made:
+                await self._run_builder()
+                if self.context.project_type == "local":
+                    await self._extract_changes()
 
-        if self.context.project_type == "local":
-            await self._extract_changes()
-
-        await self._send_status(StreamStatus.completed)
-        await self._send_result({
-            "success": True,
-            "changes_made": self._changes_made,
-        })
-        return True
+            await self._send_status(StreamStatus.completed)
+            await self._send_result({
+                "success": True,
+                "changes_made": self._changes_made,
+            })
 
     async def _handle_diff_approval(self, diff_data: dict) -> bool:
         await self._try_send({
@@ -186,77 +196,16 @@ class CustomizationRunner(RunnerBase):
         )
         if approved:
             self._changes_made = True
+            self._iteration_changes_made = True
 
-        response_json = json.dumps(self._diff_response_data or {"approved": False})
-        await asyncio.to_thread(
-            self._container.exec_run,
-            ["sh", "-c", f"cat > /workspace/customize/diff_response.json << 'DIFF_EOF'\n{response_json}\nDIFF_EOF"],
-            user="agent",
-            environment={"HOME": "/home/agent"},
-        )
         self._diff_response_data = None
         await self._send_status(StreamStatus.executing)
         return approved
-
-    async def _monitor_diffs(self):
-        while not self._cancelled and not self._agent_done.is_set():
-            try:
-                exit_code, output = await asyncio.to_thread(
-                    self._container.exec_run,
-                    ["cat", "/workspace/customize/pending_diff.json"],
-                    user="agent",
-                )
-                if exit_code == 0:
-                    try:
-                        diff_data = json.loads(decode_output(output))
-                    except json.JSONDecodeError:
-                        pass
-                    else:
-                        await asyncio.to_thread(
-                            self._container.exec_run,
-                            ["rm", "-f", "/workspace/customize/pending_diff.json"],
-                            user="agent",
-                        )
-                        await self._handle_diff_approval(diff_data)
-                        continue
-
-                await asyncio.to_thread(
-                    self._container.exec_run,
-                    [
-                        "inotifywait", "-qq", "-t", "1",
-                        "-e", "close_write,create",
-                        "--include", "pending_diff\\.json",
-                        "/workspace/customize/",
-                    ],
-                    user="agent",
-                )
-            except Exception:
-                pass
-
-        await self._flush_remaining_edits()
 
     async def _flush_remaining_edits(self):
         if self._cancelled:
             return
         try:
-            ec, output = await asyncio.to_thread(
-                self._container.exec_run,
-                ["cat", "/workspace/customize/pending_diff.json"],
-                user="agent",
-            )
-            if ec == 0:
-                try:
-                    diff_data = json.loads(decode_output(output))
-                    await asyncio.to_thread(
-                        self._container.exec_run,
-                        ["rm", "-f", "/workspace/customize/pending_diff.json"],
-                        user="agent",
-                    )
-                    await self._handle_diff_approval(diff_data)
-                    await asyncio.sleep(0.5)
-                except json.JSONDecodeError:
-                    pass
-
             state = None
             for _attempt in range(5):
                 ec, output = await asyncio.to_thread(
@@ -264,7 +213,7 @@ class CustomizationRunner(RunnerBase):
                     [
                         "sh", "-c",
                         "printf '{\"action\":\"get_state\"}' | "
-                        "socat -t5 - UNIX-CONNECT:/workspace/customize/hook.sock 2>/dev/null",
+                        "socat -t5 - UNIX-CONNECT:/workspace/work/hook.sock 2>/dev/null",
                     ],
                     user="agent",
                 )
@@ -279,60 +228,78 @@ class CustomizationRunner(RunnerBase):
             if not state:
                 return
 
-            hunks = state.get("hunks", [])
-            file_path = state.get("current_file", "")
-
-            if not hunks or not file_path:
+            files = state.get("files", [])
+            if not files:
                 return
 
-            def _hunk_sort_key(h):
-                for line in h.get("lines", []):
-                    if "num" in line:
-                        return line["num"]
-                return float("inf")
-            hunks.sort(key=_hunk_sort_key)
+            for file_info in files:
+                if self._cancelled:
+                    return
+                file_path = file_info.get("file_path", "")
+                hunks = file_info.get("hunks", [])
+                backup_path = file_info.get("backup")
+                if not file_path or not hunks:
+                    continue
 
-            if len(hunks) > 1:
-                merged = [{"lines": list(hunks[0]["lines"])}]
-                for hunk in hunks[1:]:
-                    prev = merged[-1]
-                    prev_lines = prev["lines"]
-                    curr_lines = list(hunk["lines"])
-                    if not prev_lines or not curr_lines:
-                        merged.append({"lines": curr_lines})
-                        continue
-                    prev_max = max(l["num"] for l in prev_lines)
-                    curr_min = min(l["num"] for l in curr_lines)
-                    if curr_min <= prev_max:
-                        curr_edit_nums = set(l["num"] for l in curr_lines if l["type"] != "ctx")
-                        trimmed_prev = [l for l in prev_lines if not (l["type"] == "ctx" and l["num"] in curr_edit_nums)]
-                        trimmed_curr = [l for l in curr_lines if not (l["type"] == "ctx" and l["num"] <= prev_max)]
-                        prev["lines"] = trimmed_prev + trimmed_curr
-                    else:
-                        merged.append({"lines": curr_lines})
-                hunks = merged
+                hunks.sort(key=self._hunk_sort_key)
+                hunks = self._merge_overlapping_hunks(hunks)
 
-            diff_data = {
-                "diff_id": str(uuid.uuid4()),
-                "file_path": file_path,
-                "hunks": hunks,
-            }
+                diff_data = {
+                    "diff_id": str(uuid.uuid4()),
+                    "file_path": file_path,
+                    "hunks": hunks,
+                }
 
-            approved = await self._handle_diff_approval(diff_data)
-            if not approved:
-                await asyncio.to_thread(
-                    self._container.exec_run,
-                    ["sh", "-c", f"cp /workspace/customize/file_backup '{file_path}'"],
-                    user="agent",
-                )
+                approved = await self._handle_diff_approval(diff_data)
+                if self._cancelled:
+                    # Closed mid-review: stop here and leave files as-is (close keeps
+                    # files). Without this the loop would park on the next diff's
+                    # approval wait, leaking the workflow task.
+                    return
+                if not approved and backup_path:
+                    await asyncio.to_thread(
+                        self._container.exec_run,
+                        ["sh", "-c", f"cp '{backup_path}' '{file_path}'"],
+                        user="agent",
+                    )
 
             await asyncio.to_thread(
                 self._container.exec_run,
-                ["sh", "-c", "rm -f /workspace/customize/file_backup"],
+                ["sh", "-c", "rm -rf /workspace/work/backups"],
                 user="agent",
             )
         except Exception as e:
             logger.debug("Flush remaining edits: %s", e)
+
+    @staticmethod
+    def _hunk_sort_key(h: dict) -> int | float:
+        for line in h.get("lines", []):
+            if "num" in line:
+                return line["num"]
+        return float("inf")
+
+    @staticmethod
+    def _merge_overlapping_hunks(hunks: list) -> list:
+        if len(hunks) <= 1:
+            return hunks
+        merged = [{"lines": list(hunks[0]["lines"])}]
+        for hunk in hunks[1:]:
+            prev = merged[-1]
+            prev_lines = prev["lines"]
+            curr_lines = list(hunk["lines"])
+            if not prev_lines or not curr_lines:
+                merged.append({"lines": curr_lines})
+                continue
+            prev_max = max(l["num"] for l in prev_lines)
+            curr_min = min(l["num"] for l in curr_lines)
+            if curr_min <= prev_max:
+                curr_edit_nums = set(l["num"] for l in curr_lines if l["type"] != "ctx")
+                trimmed_prev = [l for l in prev_lines if not (l["type"] == "ctx" and l["num"] in curr_edit_nums)]
+                trimmed_curr = [l for l in curr_lines if not (l["type"] == "ctx" and l["num"] <= prev_max)]
+                prev["lines"] = trimmed_prev + trimmed_curr
+            else:
+                merged.append({"lines": curr_lines})
+        return merged
 
     _EXTRACT_EXCLUDE_DIRS = [
         "node_modules", ".next", "dist", "build",
@@ -345,12 +312,12 @@ class CustomizationRunner(RunnerBase):
             f"-name '{d}'" for d in self._EXTRACT_EXCLUDE_DIRS
         )
         script = (
-            "cd /workspace/codebase/edited && "
+            f"cd {self._project_dir}/edited && "
             f"find . -mindepth 1 \\( {find_prunes} \\) -prune -o "
-            "-newer /workspace/codebase/.snapshot_marker -type f -print | "
+            f"-newer {self._project_dir}/.snapshot_marker -type f -print | "
             "while IFS= read -r f; do "
-            "  mkdir -p \"/workspace/codebase/original/$(dirname \"$f\")\"; "
-            "  cp \"$f\" \"/workspace/codebase/original/$f\"; "
+            f"  mkdir -p \"{self._project_dir}/original/$(dirname \"$f\")\"; "
+            f"  cp \"$f\" \"{self._project_dir}/original/$f\"; "
             "done"
         )
         await asyncio.to_thread(
@@ -481,60 +448,96 @@ class CustomizationRunner(RunnerBase):
         await self._try_send({"type": "save_result", "data": result})
         return result
 
-    async def discard_changes(self):
-        await asyncio.to_thread(self._clear_volumes)
+    async def teardown(self, discard: bool = False):
+        """Fully tear down the agent session: stop the agent + daemon and clear
+        the ephemeral work/ directory. When discard is set, also delete this
+        project's codebase directory. Other projects are always left untouched."""
+        self.cancel()
+        if not self._container:
+            return
+        await asyncio.sleep(0.3)
+        # Always clear the ephemeral work/ socket + backups; on discard also delete
+        # this project's codebase directory (other projects are left untouched).
+        targets = "/workspace/work/* /workspace/work/.[!.]* /workspace/work/..?*"
+        if discard:
+            targets = f"{self._project_dir} {targets}"
+        try:
+            await asyncio.to_thread(
+                self._container.exec_run,
+                ["sh", "-c", f"rm -rf {targets} 2>/dev/null || true"],
+                user="agent",
+            )
+        except Exception as e:
+            logger.error("Teardown error for %s: %s", self.project_id, e)
+
+    def _project_dir_exists(self) -> bool:
+        if self.context.project_type == "github":
+            check = f"test -d {self._project_dir}/.git"
+        else:
+            check = (
+                f"test -d {self._project_dir}/edited && "
+                f"[ -n \"$(ls -A {self._project_dir}/edited 2>/dev/null)\" ]"
+            )
+        exit_code, _ = self._container.exec_run(["sh", "-c", check], user="agent")
+        return exit_code == 0
 
     def _copy_codebase_to_volume(self) -> tuple[bool, str]:
         try:
+            if self._project_dir_exists():
+                logger.info("Reusing existing codebase for project %s (resuming prior edits)", self.project_id)
+                return (True, "")
             if self.context.project_type == "github":
                 return self._clone_github_repo()
-
-            uid, pid = self.context.user_id, self.project_id
-            host_base = os.environ.get("HOST_PROJECTS_DIR")
-            if host_base:
-                check_path = os.path.join("/local-projects", uid, pid)
-                host_path = os.path.join(host_base, uid, pid)
-            else:
-                host_path = os.path.abspath(
-                    os.path.join(os.path.dirname(__file__), "..", "Connector", "tmp", "local-projects", uid, pid)
-                )
-                check_path = host_path
-
-            if not os.path.isdir(check_path):
-                return (False, f"Codebase directory not found at {check_path}")
-
-            logger.info(f"Copying codebase from {host_path} to Docker volume")
-
-            self._container.exec_run(
-                ["sh", "-c",
-                 "rm -rf /workspace/codebase/* /workspace/codebase/.[!.]* /workspace/codebase/..?* 2>/dev/null || true; "
-                 "mkdir -p /workspace/codebase/edited /workspace/codebase/original"],
-                user="agent",
-            )
-
-            copy_ctr = get_docker_client().containers.run(
-                "alpine",
-                command=["sh", "-c", "cp -a /src/. /vol/edited/ && echo Success || echo Failed"],
-                volumes={
-                    CUSTOMIZE_CODE_VOLUME: {"bind": "/vol", "mode": "rw"},
-                    host_path: {"bind": "/src", "mode": "ro"},
-                },
-                detach=True,
-            )
-            try:
-                copy_ctr.wait()
-                decoded = decode_output(copy_ctr.logs())
-            finally:
-                try:
-                    copy_ctr.remove(force=True)
-                except Exception:
-                    pass
-            if "Success" in decoded:
-                logger.info("Codebase copied to Docker volume")
-                return (True, "")
-            return (False, f"Copy failed: {decoded}")
+            return self._copy_local_codebase()
         except Exception as e:
             return (False, str(e))
+
+    def _copy_local_codebase(self) -> tuple[bool, str]:
+        uid, pid = self.context.user_id, self.project_id
+        host_base = os.environ.get("HOST_PROJECTS_DIR")
+        if host_base:
+            check_path = os.path.join("/local-projects", uid, pid)
+            host_path = os.path.join(host_base, uid, pid)
+        else:
+            host_path = os.path.abspath(
+                os.path.join(os.path.dirname(__file__), "..", "Connector", "tmp", "local-projects", uid, pid)
+            )
+            check_path = host_path
+
+        if not os.path.isdir(check_path):
+            return (False, f"Codebase directory not found at {check_path}")
+
+        logger.info(f"Copying codebase from {host_path} to Docker volume")
+
+        self._container.exec_run(
+            ["sh", "-c",
+             f"rm -rf {self._project_dir} 2>/dev/null || true; "
+             f"mkdir -p {self._project_dir}/edited {self._project_dir}/original; "
+             "chown -R agent:agent /workspace"],
+            user="root",
+        )
+
+        copy_ctr = get_docker_client().containers.run(
+            "alpine",
+            command=["sh", "-c", f"cp -a /src/. /vol/codebase/{pid}/edited/ && echo Success || echo Failed"],
+            volumes={
+                CUSTOMIZE_CODE_VOLUME: {"bind": "/vol", "mode": "rw"},
+                host_path: {"bind": "/src", "mode": "ro"},
+            },
+            detach=True,
+        )
+        try:
+            copy_ctr.wait()
+            decoded = decode_output(copy_ctr.logs())
+        finally:
+            try:
+                copy_ctr.remove(force=True)
+            except Exception:
+                pass
+        if "Success" in decoded:
+            logger.info("Codebase copied to Docker volume")
+            return (True, "")
+        return (False, f"Copy failed: {decoded}")
 
     def _clone_github_repo(self) -> tuple[bool, str]:
         try:
@@ -552,15 +555,15 @@ class CustomizationRunner(RunnerBase):
                 clone_url += ".git"
 
             self._container.exec_run(
-                ["sh", "-c", "rm -rf /workspace/codebase/* /workspace/codebase/.[!.]* /workspace/codebase/..?* 2>/dev/null || true"],
+                ["sh", "-c", f"rm -rf {self._project_dir} 2>/dev/null || true; mkdir -p {self._project_dir}; chown -R agent:agent /workspace"],
                 user="root",
             )
 
             branch_name = f"deplai/customize-{self.project_id}"
 
             clone_script = (
-                f"git clone {clone_url} /repo && "
-                f"cd /repo && "
+                f"git clone {clone_url} /repo/codebase/{self.project_id} && "
+                f"cd /repo/codebase/{self.project_id} && "
                 f"git fetch origin {branch_name} 2>/dev/null && "
                 f"git checkout {branch_name} 2>/dev/null || true"
             )
@@ -580,22 +583,8 @@ class CustomizationRunner(RunnerBase):
                     clone_ctr.remove(force=True)
                 except Exception:
                     pass
-            logger.info("GitHub repo cloned into volume")
+            logger.info("GitHub repo cloned into volume for project %s", self.project_id)
             return (True, "")
         except Exception as e:
             logger.error("Failed to clone GitHub repo: %s", e)
             return (False, str(e))
-
-    def _clear_volumes(self):
-        try:
-            self._container.exec_run(
-                [
-                    "sh", "-c",
-                    "rm -rf /workspace/codebase/* /workspace/codebase/.[!.]* /workspace/codebase/..?* "
-                    "/workspace/customize/* /workspace/customize/.[!.]* /workspace/customize/..?* 2>/dev/null || true",
-                ],
-                user="agent",
-            )
-            logger.info("Volumes cleared")
-        except Exception as e:
-            logger.error("Failed to clear volumes: %s", e)

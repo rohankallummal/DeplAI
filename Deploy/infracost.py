@@ -15,6 +15,10 @@ logger = logging.getLogger(__name__)
 INFRACOST_IMAGE = "infracost/infracost:ci-latest"
 
 
+def _num(d: dict, key: str) -> float:
+    return float(d.get(key, 0) or 0)
+
+
 @dataclass
 class ResourceCost:
     name: str
@@ -111,8 +115,8 @@ def _collect_components(resource_data: dict) -> list[dict]:
     components = []
 
     for cost_comp in resource_data.get("costComponents", []):
-        comp_monthly = float(cost_comp.get("monthlyCost", 0) or 0)
-        comp_hourly = float(cost_comp.get("hourlyCost", 0) or 0)
+        comp_monthly = _num(cost_comp, "monthlyCost")
+        comp_hourly = _num(cost_comp, "hourlyCost")
 
         if comp_monthly > 0 or comp_hourly > 0:
             components.append({
@@ -129,15 +133,15 @@ def _collect_components(resource_data: dict) -> list[dict]:
 
 def _parse_infracost_output(data: dict) -> CostEstimate:
     try:
-        total_monthly_cost = float(data.get("totalMonthlyCost", 0) or 0)
-        total_hourly_cost = float(data.get("totalHourlyCost", 0) or 0)
+        total_monthly_cost = _num(data, "totalMonthlyCost")
+        total_hourly_cost = _num(data, "totalHourlyCost")
 
         resources = []
         for project in data.get("projects", []):
             breakdown = project.get("breakdown", {})
             for resource_data in breakdown.get("resources", []):
                 name = resource_data.get("name", "Unknown")
-                monthly_cost = float(resource_data.get("monthlyCost", 0) or 0)
+                monthly_cost = _num(resource_data, "monthlyCost")
                 components = _collect_components(resource_data)
 
                 if monthly_cost > 0 or components:

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth, verifyProjectOwnership, verifyRepositoryOwnership } from '@/lib/auth';
 import { githubService } from '@/lib/github';
-import { CUSTOMIZE_URL, customizeHeaders } from '@/lib/customize';
+import { CUSTOMIZE_URL, customizeHeaders, logCustomizeError, isConnectionRefused, customizeUnavailableResponse } from '@/lib/customize';
 
 export async function POST(request: NextRequest) {
   try {
@@ -70,7 +70,8 @@ export async function POST(request: NextRequest) {
     const data = await response.json();
     return NextResponse.json(data);
   } catch (err: any) {
-    console.error('Customize validation error:', err);
+    logCustomizeError('Customize', err);
+    if (isConnectionRefused(err)) return customizeUnavailableResponse();
     return NextResponse.json(
       { error: 'Failed to validate customization' },
       { status: 500 }

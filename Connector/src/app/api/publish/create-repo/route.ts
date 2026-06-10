@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/auth';
-import { SECURITY_URL, securityHeaders } from '@/lib/security';
+import { SECURITY_URL, securityHeaders, logSecurityError, isConnectionRefused, securityUnavailableResponse } from '@/lib/security';
 
 export async function POST(request: NextRequest) {
   try {
@@ -48,7 +48,8 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json(data);
   } catch (error: any) {
-    console.error('Publish create-repo error:', error);
+    logSecurityError('Publish create-repo', error);
+    if (isConnectionRefused(error)) return securityUnavailableResponse();
     return NextResponse.json(
       { error: 'Failed to create repository' },
       { status: 500 }

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth, verifyAnyProjectAccess } from '@/lib/auth';
-import { SECURITY_URL, securityHeaders } from '@/lib/security';
+import { SECURITY_URL, securityHeaders, logSecurityError } from '@/lib/security';
 
 export async function GET(request: NextRequest) {
   try {
@@ -26,7 +26,7 @@ export async function GET(request: NextRequest) {
     const data = await response.json();
     return NextResponse.json(data);
   } catch (error: any) {
-    console.error('Scan status error:', error);
+    logSecurityError('Scan status', error);
     return NextResponse.json({ status: 'not_initiated' });
   }
 }

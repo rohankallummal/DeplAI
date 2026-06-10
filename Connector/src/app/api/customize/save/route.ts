@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/auth';
-import { CUSTOMIZE_URL, customizeHeaders } from '@/lib/customize';
+import { CUSTOMIZE_URL, customizeHeaders, logCustomizeError, isConnectionRefused, customizeUnavailableResponse } from '@/lib/customize';
 
 export async function POST(request: NextRequest) {
   try {
@@ -16,7 +16,9 @@ export async function POST(request: NextRequest) {
 
     const data = await response.json();
     return NextResponse.json(data);
-  } catch {
+  } catch (error) {
+    logCustomizeError('Customize save', error);
+    if (isConnectionRefused(error)) return customizeUnavailableResponse();
     return NextResponse.json(
       { success: false, message: 'Save service unreachable' },
       { status: 502 },

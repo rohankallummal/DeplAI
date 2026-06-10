@@ -1,24 +1,24 @@
 #!/usr/bin/env python3
 
+import hashlib
 import json
 import os
 import shutil
 import signal
 import socket
 import sys
-import time
-import uuid
 
-BASE = "/workspace/customize"
+BASE = "/workspace/work"
 SOCK_PATH = os.path.join(BASE, "hook.sock")
-PENDING = os.path.join(BASE, "pending_diff.json")
-RESPONSE = os.path.join(BASE, "diff_response.json")
-FILE_BACKUP = os.path.join(BASE, "file_backup")
-TIMEOUT = 300
+BACKUPS_DIR = os.path.join(BASE, "backups")
 CONTEXT = 3
 
-_current_file: str = ""
-_accumulated_hunks: list = []
+_files: dict[str, list] = {}
+_file_backups: dict[str, str] = {}
+
+
+def _backup_path_for(file_path: str) -> str:
+    return os.path.join(BACKUPS_DIR, hashlib.md5(file_path.encode()).hexdigest())
 
 
 def build_hunk(fp: str, old_s: str, new_s: str) -> dict:
@@ -50,122 +50,50 @@ def build_hunk(fp: str, old_s: str, new_s: str) -> dict:
     return {"lines": lines}
 
 
-def hunk_sort_key(h: dict) -> int | float:
-    for line in h.get("lines", []):
-        if "num" in line:
-            return line["num"]
-    return float("inf")
-
-
-def merge_overlapping_hunks(hunks: list) -> list:
-    if len(hunks) <= 1:
-        return hunks
-    merged = [{"lines": list(hunks[0]["lines"])}]
-    for hunk in hunks[1:]:
-        prev = merged[-1]
-        prev_lines = prev["lines"]
-        curr_lines = list(hunk["lines"])
-        if not prev_lines or not curr_lines:
-            merged.append({"lines": curr_lines})
-            continue
-        prev_max = max(l["num"] for l in prev_lines)
-        curr_min = min(l["num"] for l in curr_lines)
-        if curr_min <= prev_max:
-            curr_edit_nums = set(l["num"] for l in curr_lines if l["type"] != "ctx")
-            trimmed_prev = [l for l in prev_lines if not (l["type"] == "ctx" and l["num"] in curr_edit_nums)]
-            trimmed_curr = [l for l in curr_lines if not (l["type"] == "ctx" and l["num"] <= prev_max)]
-            prev["lines"] = trimmed_prev + trimmed_curr
-        else:
-            merged.append({"lines": curr_lines})
-    return merged
-
-
-def send_and_wait(fp: str, hunks: list) -> bool:
-    hunks = merge_overlapping_hunks(sorted(hunks, key=hunk_sort_key))
-
-    for f in (PENDING, RESPONSE):
-        try:
-            os.remove(f)
-        except FileNotFoundError:
-            pass
-
-    payload = {
-        "diff_id": str(uuid.uuid4()),
-        "file_path": fp,
-        "hunks": hunks,
-    }
-    with open(PENDING, "w") as f:
-        json.dump(payload, f)
-
-    for _ in range(TIMEOUT * 2):
-        if os.path.exists(RESPONSE):
-            try:
-                with open(RESPONSE) as f:
-                    resp = json.load(f)
-            except (json.JSONDecodeError, FileNotFoundError):
-                resp = {}
-            try:
-                os.remove(RESPONSE)
-            except Exception:
-                pass
-            try:
-                os.remove(PENDING)
-            except Exception:
-                pass
-            return resp.get("approved", False)
-        time.sleep(0.5)
-
-    try:
-        os.remove(PENDING)
-    except Exception:
-        pass
-    return False
-
-
 def handle_edit(data: dict) -> None:
-    global _current_file, _accumulated_hunks
-
     tool_input = data.get("tool_input", data)
     file_path = tool_input.get("file_path", "")
     old_string = tool_input.get("old_string", "")
     new_string = tool_input.get("new_string", "")
 
-    if _current_file and _current_file != file_path:
-        if _accumulated_hunks:
-            approved = send_and_wait(_current_file, _accumulated_hunks)
-            if not approved:
-                try:
-                    shutil.copy2(FILE_BACKUP, _current_file)
-                except Exception:
-                    pass
-        _accumulated_hunks = []
+    if not file_path:
+        return
 
-    if _current_file != file_path:
+    if file_path not in _files:
         try:
-            shutil.copy2(file_path, FILE_BACKUP)
+            os.makedirs(BACKUPS_DIR, exist_ok=True)
+            backup_path = _backup_path_for(file_path)
+            shutil.copy2(file_path, backup_path)
+            _file_backups[file_path] = backup_path
         except Exception:
             pass
-        _current_file = file_path
+        _files[file_path] = []
 
     hunk = build_hunk(file_path, old_string, new_string)
-    _accumulated_hunks.append(hunk)
+    _files[file_path].append(hunk)
 
 
 def handle_get_state() -> dict:
-    global _current_file, _accumulated_hunks
+    global _files, _file_backups
     state = {
-        "current_file": _current_file,
-        "hunks": _accumulated_hunks,
+        "files": [
+            {
+                "file_path": fp,
+                "hunks": hunks,
+                "backup": _file_backups.get(fp),
+            }
+            for fp, hunks in _files.items()
+        ],
     }
-    _current_file = ""
-    _accumulated_hunks = []
+    _files = {}
+    _file_backups = {}
     return state
 
 
 def handle_reset() -> None:
-    global _current_file, _accumulated_hunks
-    _current_file = ""
-    _accumulated_hunks = []
+    global _files, _file_backups
+    _files = {}
+    _file_backups = {}
 
 
 def run_server() -> None:

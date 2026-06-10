@@ -38,6 +38,19 @@ def get_github_user_identity(token: str, owner: str) -> tuple[str, str]:
     return (owner, f"{owner}@users.noreply.github.com")
 
 
+def _run_and_cleanup(**run_kwargs) -> tuple[dict, str]:
+    container = get_docker_client().containers.run(detach=True, **run_kwargs)
+    try:
+        result = container.wait()
+        logs = decode_output(container.logs())
+    finally:
+        try:
+            container.remove(force=True)
+        except Exception:
+            pass
+    return result, logs
+
+
 def save_local_changes(project_id: str, user_id: str) -> tuple[bool, str]:
     host_base = os.environ.get("HOST_PROJECTS_DIR")
     if host_base:
@@ -50,20 +63,15 @@ def save_local_changes(project_id: str, user_id: str) -> tuple[bool, str]:
             )
         )
 
-    container = None
     try:
-        container = get_docker_client().containers.run(
-            "alpine",
-            command=["sh", "-c",
-                     "cp -a /vol/original/. /dst/ 2>/dev/null; echo Success"],
+        _, logs = _run_and_cleanup(
+            image="alpine",
+            command=["sh", "-c", f"cp -a /vol/codebase/{project_id}/original/. /dst/ 2>/dev/null; echo Success"],
             volumes={
                 CUSTOMIZE_CODE_VOLUME: {"bind": "/vol", "mode": "ro"},
                 host_path: {"bind": "/dst", "mode": "rw"},
             },
-            detach=True,
         )
-        container.wait()
-        logs = decode_output(container.logs())
         if "Success" in logs:
             logger.info("Local changes saved for project %s", project_id)
             return (True, "Changes saved successfully")
@@ -71,12 +79,6 @@ def save_local_changes(project_id: str, user_id: str) -> tuple[bool, str]:
     except Exception as e:
         logger.error("Failed to save local changes: %s", e)
         return (False, str(e))
-    finally:
-        if container:
-            try:
-                container.remove(force=True)
-            except Exception:
-                pass
 
 
 def create_customize_pr(
@@ -92,8 +94,8 @@ def create_customize_pr(
     user_name, user_email = get_github_user_identity(token, owner)
 
     script = " && ".join([
-        "git config --global --add safe.directory /repo",
-        "cd /repo",
+        f"git config --global --add safe.directory /repo/codebase/{project_id}",
+        f"cd /repo/codebase/{project_id}",
         f'git config user.email "{user_email}"',
         f'git config user.name "{user_name}"',
         f"git checkout {branch_name} 2>/dev/null || git checkout -b {branch_name}",
@@ -104,18 +106,14 @@ def create_customize_pr(
         f"git push --force origin {branch_name}",
     ])
 
-    client = get_docker_client()
-    container = None
     try:
-        container = client.containers.run(
-            "alpine/git",
+        result, logs = _run_and_cleanup(
+            image="alpine/git",
             entrypoint="sh",
             command=["-c", script],
             volumes={CUSTOMIZE_CODE_VOLUME: {"bind": "/repo", "mode": "rw"}},
-            detach=True,
+            tmpfs={"/git": ""},
         )
-        result = container.wait()
-        logs = decode_output(container.logs())
 
         if "NO_CHANGES" in logs:
             return (False, "No changes to commit", None)
@@ -126,12 +124,6 @@ def create_customize_pr(
     except Exception as e:
         logger.error("Docker error during push: %s", e)
         return (False, f"Failed to push branch: {e}", None)
-    finally:
-        if container:
-            try:
-                container.remove(force=True)
-            except Exception:
-                pass
 
     logger.info("Pushed branch %s to %s/%s", branch_name, owner, repo)
     headers = github_headers(token)

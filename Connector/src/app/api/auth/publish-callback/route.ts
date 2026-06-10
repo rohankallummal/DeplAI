@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getIronSession } from 'iron-session';
 import { cookies } from 'next/headers';
 import { sessionOptions, SessionData } from '@/lib/session';
-import { SECURITY_URL, securityHeaders } from '@/lib/security';
+import { SECURITY_URL, securityHeaders, logSecurityError } from '@/lib/security';
+import { exchangeGitHubCode } from '@/lib/github-oauth';
 
 function popupResponse(success: boolean, error?: string) {
   const payload = JSON.stringify({ type: 'publish-auth', success, error: error ?? null });
@@ -36,17 +37,7 @@ export async function GET(request: NextRequest) {
   delete session.publishState;
   await session.save();
 
-  const tokenRes = await fetch('https://github.com/login/oauth/access_token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: JSON.stringify({
-      client_id: process.env.GITHUB_CLIENT_ID,
-      client_secret: process.env.GITHUB_CLIENT_SECRET,
-      code,
-    }),
-  });
-
-  const tokenData = await tokenRes.json();
+  const tokenData = await exchangeGitHubCode(code);
 
   if (tokenData.error) {
     return popupResponse(false, 'GitHub authorization failed');
@@ -63,7 +54,8 @@ export async function GET(request: NextRequest) {
         expires_in: tokenData.expires_in ?? null,
       }),
     });
-  } catch {
+  } catch (error) {
+    logSecurityError('Publish token store', error);
     return popupResponse(false, 'Failed to store token');
   }
 

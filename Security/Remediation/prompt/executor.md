@@ -38,19 +38,17 @@ To fix these, you must do two things:
 1. Update the version number in the **manifest file** (e.g.,`package.json`).
 2. **Regenerate the lock file** by running the appropriate install command.
  
-**Code security vulnerabilities** (`scan_data.code_security`) are insecure patterns in the project's own source code. Bearer detected these, and they are grouped by CWE (Common Weakness Enumeration) identifier. Each group has one or more `occurrences`, and each occurrence tells you exactly which file and which line number contains the problem.
+**Code security vulnerabilities** (`scan_data.code_security`) are insecure patterns in the project's own source code. They are grouped by CWE (Common Weakness Enumeration) identifier. Each group has one or more `occurrences`, and each occurrence tells you exactly which file and which line number contains the problem.
  
-You must fix every occurrence in every file. Do not fix just one occurrence and assume the others are duplicates — check each one individually. They may be in different files or involve different code paths.
+You must fix every occurrence. Do not fix just one occurrence and assume the others are duplicates — check each one individually. They may be in different files or involve different code paths.
 
 ### Attempt 1
  
 1. **Plan your fixes.** Go through every vulnerability in `scan_data.json` and decide how you will fix it.
 
-2. **Research when needed.** If you are unsure how to fix a particular vulnerability use Firecrawl to look it up. But always check the Knowledge Store first (see the Knowledge Store section below). 
+2. **Apply all fixes.**
 
-3. **Apply all fixes.**
-
-4. **Run the scanners** to check your work:
+3. **Run the scanners** to check your work:
    ```
    python /app/Remediation/tools.py run-scanners \
        --project-name "{project_name}" \
@@ -58,34 +56,29 @@ You must fix every occurrence in every file. Do not fix just one occurrence and 
        --cycle 1
    ```
 
-5. **Read the results** from two files:
-   - `/workspace/security/cycle1/bearer.json` — code security findings
-   - `/workspace/security/cycle1/grype.json` — supply chain findings
+4. **Read the results** from `/workspace/security/cycle1/scan_data.json`.
 
-6. **Evaluate the outcome.**
-   - If both files show zero remaining vulnerabilities, you are done with Phase 1.
+5. **Evaluate the outcome.**
+   - If the file contains zero remaining vulnerabilities, you are done with Phase 1.
    - Otherwise move on to attempt 2
 
 
 ### Attempt 2 — Change Your Approach
  
-Compare the cycle 1 scan results against the original `scan_data.json` to build a clear picture:
-- Which vulnerabilities are still present unchanged?
-- Which ones are partially fixed
-- Did any new vulnerabilities appear as a side effect of your fixes?
+1. Read `/workspace/security/cycle1/scan_data.json`  
 
-For each remaining vulnerability, you must choose a **different strategy** than what you used in Attempt 1. 
+2. go on the web research how to fix a particular vulnerability But always check the Knowledge Store first (see the Knowledge Store section below). 
 
-Apply the revised fixes, then run the scanners again:
-```
-python /app/Remediation/tools.py run-scanners \
-    --project-name "{project_name}" \
-    --project-id "{project_id}" \
-    --cycle 2
-```
+3. Apply the revised fixes, then run the scanners again:
+    ```
+    python /app/Remediation/tools.py run-scanners \
+        --project-name "{project_name}" \
+        --project-id "{project_id}" \
+        --cycle 2
+    ```
  
-Read the results from `/workspace/security/cycle2/bearer.json` and `/workspace/security/cycle2/grype.json`.
- 
+4. Read the results from `/workspace/security/cycle2/scan_data.json`
+
 If all vulnerabilities are resolved, skip to Phase 2. Otherwise, continue to Attempt 3.
  
 ### Attempt 3 — Go Deeper
@@ -102,7 +95,7 @@ python /app/Remediation/tools.py run-scanners \
     --cycle 3
 ```
  
-Read the results from `/workspace/security/cycle3/bearer.json` and `/workspace/security/cycle3/grype.json`.
+Read the results from `/workspace/security/cycle3/scan_data.json`.
  
 After Attempt 3 if the remediations are not resolved **exit the process immediately**
  

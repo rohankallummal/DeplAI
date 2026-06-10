@@ -98,11 +98,12 @@ def create_repo(
             entrypoint="sh",
             command=["-c", script],
             volumes={CODEBASE_VOLUME: {"bind": "/repo", "mode": "rw"}},
+            tmpfs={"/git": ""},
             detach=True,
         )
         result = container.wait(timeout=120)
         logs = decode_output(container.logs())
-        container.remove()
+        container.remove(v=True)
 
         if result.get("StatusCode", -1) != 0:
             logger.error("Git push failed: %s", logs)
