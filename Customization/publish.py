@@ -63,10 +63,31 @@ def save_local_changes(project_id: str, user_id: str) -> tuple[bool, str]:
             )
         )
 
+    # Overlay the modified/created files (additive), then apply the recorded
+    # deletions. cp -a can only add/overwrite, so deletions must be replayed
+    # explicitly. Each path is validated before rm -f: absolute paths and any
+    # path containing ".." are rejected outright, and the resolved target must
+    # still live inside /dst (defense against a corrupted .deletions manifest).
+    save_script = (
+        f"cp -a /vol/codebase/{project_id}/original/. /dst/ 2>/dev/null; "
+        f"deletions=/vol/codebase/{project_id}/.deletions; "
+        'if [ -f "$deletions" ]; then '
+        'root=$(realpath /dst); '
+        'while IFS= read -r f; do '
+        '[ -z "$f" ] && continue; '
+        'case "$f" in /*) continue ;; esac; '
+        'case "$f" in *..*) continue ;; esac; '
+        'real=$(realpath "/dst/$f" 2>/dev/null) || continue; '
+        'case "$real" in "$root"|"$root"/*) rm -f "$real" ;; esac; '
+        'done < "$deletions"; '
+        'fi; '
+        'echo Success'
+    )
+
     try:
         _, logs = _run_and_cleanup(
             image="alpine",
-            command=["sh", "-c", f"cp -a /vol/codebase/{project_id}/original/. /dst/ 2>/dev/null; echo Success"],
+            command=["sh", "-c", save_script],
             volumes={
                 CUSTOMIZE_CODE_VOLUME: {"bind": "/vol", "mode": "ro"},
                 host_path: {"bind": "/dst", "mode": "rw"},

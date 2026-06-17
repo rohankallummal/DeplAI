@@ -103,7 +103,7 @@ class CustomizationRunner(RunnerBase):
         if self.context.project_type == "local":
             await asyncio.to_thread(
                 self._container.exec_run,
-                ["touch", f"{self._project_dir}/.snapshot_marker"],
+                ["sh", "-c", self._snapshot_baseline_script()],
                 user="agent",
             )
 
@@ -161,8 +161,20 @@ class CustomizationRunner(RunnerBase):
             )
             await self._flush_remaining_edits()
 
+            # Capture what actually changed on disk this iteration. For local
+            # projects the filesystem is the source of truth: the agent may
+            # create / delete / rename / recreate files via Write, rm, mv or
+            # shell commands — operations that never set the Edit-approval flag.
+            # So run extraction unconditionally and derive the change state from
+            # what was promoted or deleted, not from approved Edit diffs.
+            iteration_changed = self._iteration_changes_made
+            if self.context.project_type == "local" and not self._cancelled:
+                if await self._extract_changes():
+                    iteration_changed = True
+                    self._changes_made = True
+
             if not execute_result or not execute_result.get("success"):
-                if self._iteration_changes_made:
+                if iteration_changed:
                     logger.warning("Styler had errors but some changes were applied this iteration")
                 else:
                     logger.error("Styler failed; awaiting next user request")
@@ -170,9 +182,11 @@ class CustomizationRunner(RunnerBase):
                     await self._send_status(StreamStatus.error)
                     continue
 
-            if self._iteration_changes_made:
+            if iteration_changed:
                 await self._run_builder()
-                if self.context.project_type == "local":
+                # The builder may edit files to fix the build; re-capture so its
+                # changes are promoted into original/ too (idempotent recompute).
+                if self.context.project_type == "local" and not self._cancelled:
                     await self._extract_changes()
 
             await self._send_status(StreamStatus.completed)
@@ -257,9 +271,13 @@ class CustomizationRunner(RunnerBase):
                     # approval wait, leaking the workflow task.
                     return
                 if not approved and backup_path:
+                    # -p preserves the backup's mtime (the pre-edit timestamp,
+                    # older than the snapshot marker) so a rejected-then-restored
+                    # file is not mistaken for a change by _extract_changes, which
+                    # now runs unconditionally and keys off mtime.
                     await asyncio.to_thread(
                         self._container.exec_run,
-                        ["sh", "-c", f"cp '{backup_path}' '{file_path}'"],
+                        ["sh", "-c", f"cp -p '{backup_path}' '{file_path}'"],
                         user="agent",
                     )
 
@@ -307,25 +325,84 @@ class CustomizationRunner(RunnerBase):
         ".turbo", ".swc", ".git",
     ]
 
-    async def _extract_changes(self):
-        find_prunes = " -o ".join(
-            f"-name '{d}'" for d in self._EXTRACT_EXCLUDE_DIRS
+    def _find_prunes(self) -> str:
+        """Prune expression shared by every file scan (snapshot baseline,
+        current scan, and modification extraction) so they enumerate an
+        identical set of tracked files. _EXTRACT_EXCLUDE_DIRS is the single
+        source of truth."""
+        return " -o ".join(f"-name '{d}'" for d in self._EXTRACT_EXCLUDE_DIRS)
+
+    def _list_tracked_files_cmd(self) -> str:
+        """Pipeline (run from edited/) listing every tracked file in ./relative
+        form, pruned identically to _extract_changes and sorted with a stable
+        C-locale collation so two such lists can be diffed with `comm`."""
+        return (
+            f"find . -mindepth 1 \\( {self._find_prunes()} \\) -prune -o "
+            "-type f -print | LC_ALL=C sort"
         )
-        script = (
+
+    def _snapshot_baseline_script(self) -> str:
+        """Lay down both baselines at the same instant: the mtime baseline
+        (.snapshot_marker, used to detect modifications) and the file-list
+        baseline (.snapshot_files, used to detect deletions). Both live outside
+        edited/ and original/ so they are never copied into the user's project."""
+        return (
+            f"touch {self._project_dir}/.snapshot_marker && "
             f"cd {self._project_dir}/edited && "
-            f"find . -mindepth 1 \\( {find_prunes} \\) -prune -o "
-            f"-newer {self._project_dir}/.snapshot_marker -type f -print | "
-            "while IFS= read -r f; do "
-            f"  mkdir -p \"{self._project_dir}/original/$(dirname \"$f\")\"; "
-            f"  cp \"$f\" \"{self._project_dir}/original/$f\"; "
-            "done"
+            f"{self._list_tracked_files_cmd()} > {self._project_dir}/.snapshot_files"
         )
-        await asyncio.to_thread(
+
+    async def _extract_changes(self) -> bool:
+        """Promote files modified/created since the snapshot into original/ and
+        recompute .deletions, then report whether anything changed this pass.
+
+        Filesystem-based and tool-agnostic: it captures Write / rm / mv / shell
+        operations as well as Edits. Returns True iff at least one file was
+        promoted or recorded as deleted — the caller uses this to drive the
+        session change state (which gates the Save / exit-unsaved warning)."""
+        pd = self._project_dir
+        prunes = self._find_prunes()
+        script = (
+            f"cd {pd}/edited && "
+            # Promote files modified/created since the snapshot marker.
+            f"find . -mindepth 1 \\( {prunes} \\) -prune -o "
+            f"-newer {pd}/.snapshot_marker -type f -print > {pd}/.changed_files; "
+            "while IFS= read -r f; do "
+            f"  mkdir -p \"{pd}/original/$(dirname \"$f\")\"; "
+            f"  cp \"$f\" \"{pd}/original/$f\"; "
+            f"done < {pd}/.changed_files; "
+            # Recompute deletions against the fixed snapshot baseline and
+            # overwrite .deletions each iteration (never append): a file deleted
+            # then recreated correctly drops back out. The .changed_files /
+            # .current_files scratch lists and .deletions all live outside
+            # edited/ and original/, so neither the scan nor `cp -a original/.`
+            # ever sees them.
+            f"{self._list_tracked_files_cmd()} > {pd}/.current_files && "
+            f"LC_ALL=C comm -23 {pd}/.snapshot_files {pd}/.current_files > {pd}/.deletions; "
+            f"promoted=$(wc -l < {pd}/.changed_files | tr -dc 0-9); "
+            f"deleted=$(wc -l < {pd}/.deletions | tr -dc 0-9); "
+            f"rm -f {pd}/.changed_files {pd}/.current_files; "
+            'echo "EXTRACT_RESULT promoted=${promoted:-0} deleted=${deleted:-0}"'
+        )
+        _, output = await asyncio.to_thread(
             self._container.exec_run,
             ["sh", "-c", script],
             user="agent",
         )
-        logger.info("Changed files extracted to original/")
+        promoted = deleted = 0
+        for line in decode_output(output).splitlines():
+            if line.startswith("EXTRACT_RESULT"):
+                for tok in line.split():
+                    if tok.startswith("promoted="):
+                        promoted = int(tok.split("=", 1)[1] or 0)
+                    elif tok.startswith("deleted="):
+                        deleted = int(tok.split("=", 1)[1] or 0)
+        changed = promoted > 0 or deleted > 0
+        logger.info(
+            "Extracted changes: %d promoted, %d deleted (changed=%s)",
+            promoted, deleted, changed,
+        )
+        return changed
 
     async def _run_builder(self):
         self._check_cancelled()
