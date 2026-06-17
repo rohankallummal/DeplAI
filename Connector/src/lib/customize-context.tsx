@@ -28,7 +28,7 @@ export interface DiffPreview {
 export interface ChatMessage {
   id: string;
   role: 'user' | 'agent';
-  type: 'text' | 'diff' | 'interrupted' | 'save_result';
+  type: 'text' | 'diff' | 'interrupted' | 'save_result' | 'file_event';
   content?: string;
   diff?: DiffPreview;
   saveResult?: { success: boolean; message: string; url?: string };
@@ -207,6 +207,20 @@ export function CustomizeProvider({ children }: { children: React.ReactNode }) {
             saveResult: data.data,
             content: data.data?.message || '',
           });
+          break;
+        }
+
+        case 'file_event': {
+          const action = data.data?.action;
+          const path: string = data.data?.path || '';
+          const name = path.split('/').pop() || path;
+          const dir = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
+          const content = action === 'deleted'
+            ? `Deleted ${name} from the project.`
+            : dir
+              ? `Created ${name} in ${dir}/.`
+              : `Created ${name} in the project root.`;
+          addChatMessage(projectId, { role: 'agent', type: 'file_event', content });
           break;
         }
 

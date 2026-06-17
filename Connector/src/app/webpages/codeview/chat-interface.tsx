@@ -301,6 +301,14 @@ export default function ChatInterface({
                   );
                 }
 
+                if (msg.type === 'file_event') {
+                  return (
+                    <div key={msg.id} className="pl-7 text-xs italic text-neutral-500 dark:text-neutral-400">
+                      {msg.content}
+                    </div>
+                  );
+                }
+
                 if (msg.type === 'diff' && msg.diff) {
                   const footer = msg.diff.status === 'pending' ? (
                     <ApprovalButtons
