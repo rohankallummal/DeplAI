@@ -176,8 +176,7 @@ class CustomizationRunner(RunnerBase):
                     pass
 
             await self._finalize_diffs()
-            if self._cancelled:
-                return
+            self._check_cancelled()
 
             # Capture what actually changed on disk this iteration. For local
             # projects the filesystem is the source of truth: the agent may
@@ -221,7 +220,13 @@ class CustomizationRunner(RunnerBase):
         if self._cancelled:
             return
 
-        await self._emit_pending_diffs()  # authoritative final peek
+        # Authoritative final peek. The agent has exited, so this snapshot is
+        # complete — but a single missed peek here could let last-moment edits be
+        # finalized without review, so retry a few times on transient failure.
+        for _attempt in range(5):
+            if await self._emit_pending_diffs():
+                break
+            await asyncio.sleep(0.3)
 
         if self._diffs.has_unsettled():
             await self._send_status(StreamStatus.awaiting_decisions)
@@ -248,6 +253,8 @@ class CustomizationRunner(RunnerBase):
             return
 
         for rec in self._diffs.records.values():
+            if self._cancelled:
+                return
             if rec.decision == "approved":
                 self._changes_made = True
                 self._iteration_changes_made = True
@@ -404,10 +411,12 @@ class CustomizationRunner(RunnerBase):
         except json.JSONDecodeError:
             return None
 
-    async def _emit_pending_diffs(self):
+    async def _emit_pending_diffs(self) -> bool:
+        """Peek the daemon and (re)send diff previews for changed files. Returns
+        True if the peek succeeded (so callers can retry on transient failure)."""
         state = await self._peek_daemon()
-        if not state:
-            return
+        if state is None:
+            return False
         for f in state.get("files", []):
             file_path = f.get("file_path", "")
             hunks = f.get("hunks", [])
@@ -428,6 +437,7 @@ class CustomizationRunner(RunnerBase):
                     "rev": rev,
                 },
             })
+        return True
 
     async def _poll_diffs(self):
         while not self._cancelled:
