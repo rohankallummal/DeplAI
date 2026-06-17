@@ -15,6 +15,7 @@ CONTEXT = 3
 
 _files: dict[str, list] = {}
 _file_backups: dict[str, str] = {}
+_file_rev: dict[str, int] = {}
 
 
 def _backup_path_for(file_path: str) -> str:
@@ -71,10 +72,25 @@ def handle_edit(data: dict) -> None:
 
     hunk = build_hunk(file_path, old_string, new_string)
     _files[file_path].append(hunk)
+    _file_rev[file_path] = _file_rev.get(file_path, 0) + 1
+
+
+def handle_peek() -> dict:
+    return {
+        "files": [
+            {
+                "file_path": fp,
+                "hunks": hunks,
+                "backup": _file_backups.get(fp),
+                "rev": _file_rev.get(fp, 0),
+            }
+            for fp, hunks in _files.items()
+        ],
+    }
 
 
 def handle_get_state() -> dict:
-    global _files, _file_backups
+    global _files, _file_backups, _file_rev
     state = {
         "files": [
             {
@@ -87,13 +103,15 @@ def handle_get_state() -> dict:
     }
     _files = {}
     _file_backups = {}
+    _file_rev = {}
     return state
 
 
 def handle_reset() -> None:
-    global _files, _file_backups
+    global _files, _file_backups, _file_rev
     _files = {}
     _file_backups = {}
+    _file_rev = {}
 
 
 def run_server() -> None:
@@ -138,7 +156,10 @@ def run_server() -> None:
             data = json.loads(raw)
             action = data.get("action")
 
-            if action == "get_state":
+            if action == "peek":
+                state = handle_peek()
+                conn.sendall(json.dumps(state).encode())
+            elif action == "get_state":
                 state = handle_get_state()
                 conn.sendall(json.dumps(state).encode())
             elif action == "reset":
