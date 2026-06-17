@@ -113,7 +113,7 @@ async def websocket_customize(websocket: WebSocket, project_id: str, token: str 
                     await runner.receive_diff_response(
                         cmd.data.get("diff_id", ""),
                         cmd.data.get("approved", False),
-                        cmd.data.get("rev", 0),
+                        cmd.data.get("rev"),
                     )
 
     except (WebSocketDisconnect, RuntimeError):

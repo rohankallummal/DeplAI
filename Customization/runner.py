@@ -8,7 +8,7 @@ from fastapi import WebSocket
 
 from diff_state import DiffTracker, diff_id_for
 from models import CustomizeValidationRequest, StreamStatus
-from runner_base import RunnerBase
+from runner_base import RunnerBase, CancelledError
 from utils import (
     get_docker_client,
     get_or_create_customize_container,
@@ -76,7 +76,7 @@ class CustomizationRunner(RunnerBase):
         self._chat_message = message
         self._chat_event.set()
 
-    async def receive_diff_response(self, diff_id: str, approved: bool, rev: int = 0):
+    async def receive_diff_response(self, diff_id: str, approved: bool, rev: int | None = None):
         # Out-of-band: recorded against the rev the user actually reviewed, so a
         # concurrent re-edit re-opens the box instead of approving stale content.
         self._diffs.record_decision(diff_id, approved, rev)
@@ -178,43 +178,56 @@ class CustomizationRunner(RunnerBase):
                 except asyncio.CancelledError:
                     pass
 
-            await self._finalize_diffs()
-            self._check_cancelled()
+            # Post-execute processing is guarded: a transient container/exec
+            # error in finalize, extraction, or the builder must surface as an
+            # error to the user and let the session continue, not silently kill
+            # the pipeline task. CancelledError (timeout / user close) propagates
+            # to unwind normally.
+            try:
+                await self._finalize_diffs()
+                self._check_cancelled()
 
-            # Capture what actually changed on disk this iteration. For local
-            # projects the filesystem is the source of truth: the agent may
-            # create / delete / rename / recreate files via Write, rm, mv or
-            # shell commands — operations that never set the Edit-approval flag.
-            # So run extraction unconditionally and derive the change state from
-            # what was promoted or deleted, not from approved Edit diffs.
-            iteration_changed = self._iteration_changes_made
-            if self.context.project_type == "local" and not self._cancelled:
-                if await self._extract_changes():
-                    iteration_changed = True
-                    self._changes_made = True
-                await self._announce_file_events()
-
-            if not execute_result or not execute_result.get("success"):
-                if iteration_changed:
-                    logger.warning("Styler had errors but some changes were applied this iteration")
-                else:
-                    logger.error("Styler failed; awaiting next user request")
-                    await self._try_send({"type": "error", "data": "Something went wrong. Please try again."})
-                    await self._send_status(StreamStatus.error)
-                    continue
-
-            if iteration_changed:
-                await self._run_builder()
-                # The builder may edit files to fix the build; re-capture so its
-                # changes are promoted into original/ too (idempotent recompute).
+                # Capture what actually changed on disk this iteration. For local
+                # projects the filesystem is the source of truth: the agent may
+                # create / delete / rename / recreate files via Write, rm, mv or
+                # shell commands — operations that never set the Edit-approval
+                # flag. So run extraction unconditionally and derive the change
+                # state from what was promoted or deleted, not from approved Edits.
+                iteration_changed = self._iteration_changes_made
                 if self.context.project_type == "local" and not self._cancelled:
-                    await self._extract_changes()
+                    if await self._extract_changes():
+                        iteration_changed = True
+                        self._changes_made = True
+                    await self._announce_file_events()
 
-            await self._send_status(StreamStatus.completed)
-            await self._send_result({
-                "success": True,
-                "changes_made": self._changes_made,
-            })
+                if not execute_result or not execute_result.get("success"):
+                    if iteration_changed:
+                        logger.warning("Styler had errors but some changes were applied this iteration")
+                    else:
+                        logger.error("Styler failed; awaiting next user request")
+                        await self._try_send({"type": "error", "data": "Something went wrong. Please try again."})
+                        await self._send_status(StreamStatus.error)
+                        continue
+
+                if iteration_changed:
+                    await self._run_builder()
+                    # The builder may edit files to fix the build; re-capture so
+                    # its changes are promoted into original/ too (idempotent).
+                    if self.context.project_type == "local" and not self._cancelled:
+                        await self._extract_changes()
+
+                await self._send_status(StreamStatus.completed)
+                await self._send_result({
+                    "success": True,
+                    "changes_made": self._changes_made,
+                })
+            except CancelledError:
+                raise
+            except Exception:
+                logger.error("Post-execute processing failed for %s", self.project_id, exc_info=True)
+                await self._try_send({"type": "error", "data": "Something went wrong. Please try again."})
+                await self._send_status(StreamStatus.error)
+                continue
 
     async def _finalize_diffs(self):
         """After execute exits the agent is the only edit source, so the
@@ -262,23 +275,25 @@ class CustomizationRunner(RunnerBase):
             if rec.decision == "approved":
                 self._changes_made = True
                 self._iteration_changes_made = True
-            elif rec.decision == "rejected" and rec.backup:
-                # -p preserves the pre-edit mtime so _extract_changes does not
-                # re-promote a rejected file.
+            elif rec.decision == "rejected":
+                if not rec.backup:
+                    logger.warning(
+                        "Rejected diff for %s has no backup; cannot restore "
+                        "pre-edit content", rec.file_path,
+                    )
+                    continue
+                # argv form (no shell) so a path with quotes/spaces can't break
+                # the command or inject. -p preserves the pre-edit mtime so
+                # _extract_changes does not re-promote a rejected file.
                 await asyncio.to_thread(
                     self._container.exec_run,
-                    ["sh", "-c", f"cp -p '{rec.backup}' '{rec.file_path}'"],
+                    ["cp", "-p", rec.backup, rec.file_path],
                     user="agent",
                 )
 
         await asyncio.to_thread(
             self._container.exec_run,
-            [
-                "sh", "-c",
-                "printf '{\"action\":\"reset\"}' | "
-                "socat -t5 - UNIX-CONNECT:/workspace/work/hook.sock 2>/dev/null; "
-                "rm -rf /workspace/work/backups",
-            ],
+            ["sh", "-c", self._daemon_socat("reset") + "; rm -rf /workspace/work/backups"],
             user="agent",
         )
         self._diffs.reset()
@@ -360,17 +375,21 @@ class CustomizationRunner(RunnerBase):
 
     async def _announce_file_events(self):
         """Emit informational chat notices for files created/deleted this
-        iteration (net vs the per-iteration snapshot). Edited existing files are
-        in both lists, so they produce no notice (they get diff boxes instead)."""
+        iteration (net vs the per-iteration snapshot). Reuses the current-file
+        listing produced by _extract_changes (.current_files) to avoid a second
+        tree scan. Edited existing files are in both lists, so they produce no
+        notice (they get diff boxes instead)."""
         pd = self._project_dir
+        # Guard on a present, non-empty .current_files so a failed/empty scan
+        # can't emit phantom "deleted" notices for every tracked file.
         script = (
-            f"cd {pd}/edited && "
-            f"{self._list_tracked_files_cmd()} > {pd}/.iter_current_files; "
+            f"if [ -s {pd}/.current_files ] && [ -f {pd}/.iter_snapshot_files ]; then "
             "echo __CREATED__; "
-            f"LC_ALL=C comm -13 {pd}/.iter_snapshot_files {pd}/.iter_current_files; "
+            f"LC_ALL=C comm -13 {pd}/.iter_snapshot_files {pd}/.current_files; "
             "echo __DELETED__; "
-            f"LC_ALL=C comm -23 {pd}/.iter_snapshot_files {pd}/.iter_current_files; "
-            f"rm -f {pd}/.iter_current_files"
+            f"LC_ALL=C comm -23 {pd}/.iter_snapshot_files {pd}/.current_files; "
+            "fi; "
+            f"rm -f {pd}/.current_files"
         )
         _, output = await asyncio.to_thread(
             self._container.exec_run, ["sh", "-c", script], user="agent",
@@ -415,32 +434,42 @@ class CustomizationRunner(RunnerBase):
             f"  mkdir -p \"{pd}/original/$(dirname \"$f\")\"; "
             f"  cp \"$f\" \"{pd}/original/$f\"; "
             f"done < {pd}/.changed_files; "
-            # Recompute deletions against the fixed snapshot baseline and
-            # overwrite .deletions each iteration (never append): a file deleted
-            # then recreated correctly drops back out. The .changed_files /
-            # .current_files scratch lists and .deletions all live outside
-            # edited/ and original/, so neither the scan nor `cp -a original/.`
-            # ever sees them.
-            f"{self._list_tracked_files_cmd()} > {pd}/.current_files && "
+            # Recompute deletions against the fixed snapshot baseline (overwrite,
+            # never append). Guard on a NON-EMPTY current listing: an empty/failed
+            # scan must not make `comm -23` report every file as deleted, which
+            # would mass-delete the user's project at save. .current_files is left
+            # in place for _announce_file_events to reuse (one scan, not two); it
+            # lives outside edited/ and original/, so it is neither scanned nor
+            # shipped by `cp -a original/.`.
+            f"{self._list_tracked_files_cmd()} > {pd}/.current_files; "
+            f"if [ -s {pd}/.current_files ]; then "
             f"LC_ALL=C comm -23 {pd}/.snapshot_files {pd}/.current_files > {pd}/.deletions; "
+            f"else : > {pd}/.deletions; fi; "
             f"promoted=$(wc -l < {pd}/.changed_files | tr -dc 0-9); "
             f"deleted=$(wc -l < {pd}/.deletions | tr -dc 0-9); "
-            f"rm -f {pd}/.changed_files {pd}/.current_files; "
+            f"rm -f {pd}/.changed_files; "
             'echo "EXTRACT_RESULT promoted=${promoted:-0} deleted=${deleted:-0}"'
         )
-        _, output = await asyncio.to_thread(
+        ec, output = await asyncio.to_thread(
             self._container.exec_run,
             ["sh", "-c", script],
             user="agent",
         )
         promoted = deleted = 0
+        found = False
         for line in decode_output(output).splitlines():
             if line.startswith("EXTRACT_RESULT"):
+                found = True
                 for tok in line.split():
                     if tok.startswith("promoted="):
                         promoted = int(tok.split("=", 1)[1] or 0)
                     elif tok.startswith("deleted="):
                         deleted = int(tok.split("=", 1)[1] or 0)
+        if ec != 0 or not found:
+            logger.error(
+                "Extraction did not complete cleanly for %s (exit=%s, parsed=%s); "
+                "promoted/deleted counts may be incomplete", self.project_id, ec, found,
+            )
         changed = promoted > 0 or deleted > 0
         logger.info(
             "Extracted changes: %d promoted, %d deleted (changed=%s)",
@@ -448,14 +477,19 @@ class CustomizationRunner(RunnerBase):
         )
         return changed
 
+    @staticmethod
+    def _daemon_socat(action: str) -> str:
+        """Shell snippet that sends a one-shot JSON action to the diff-daemon
+        socket and prints its response. Shared by peek and reset."""
+        return (
+            f"printf '{{\"action\":\"{action}\"}}' | "
+            "socat -t5 - UNIX-CONNECT:/workspace/work/hook.sock 2>/dev/null"
+        )
+
     async def _peek_daemon(self) -> dict | None:
         ec, output = await asyncio.to_thread(
             self._container.exec_run,
-            [
-                "sh", "-c",
-                "printf '{\"action\":\"peek\"}' | "
-                "socat -t5 - UNIX-CONNECT:/workspace/work/hook.sock 2>/dev/null",
-            ],
+            ["sh", "-c", self._daemon_socat("peek")],
             user="agent",
         )
         if ec != 0:

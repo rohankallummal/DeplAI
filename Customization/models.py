@@ -1,8 +1,11 @@
+import re
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+_IDENTIFIER_RE = re.compile(r"[A-Za-z0-9._-]+")
 
 
 class CustomizeValidationRequest(BaseModel):
@@ -15,6 +18,19 @@ class CustomizeValidationRequest(BaseModel):
     owner: Optional[str] = None
     repo: Optional[str] = None
     default_branch: Optional[str] = "main"
+
+    @field_validator("project_id", "user_id")
+    @classmethod
+    def _safe_identifier(cls, v: str) -> str:
+        # project_id and user_id flow into container shell commands and host
+        # filesystem paths (e.g. /vol/codebase/<project_id>,
+        # <host>/<user_id>/<project_id>), so constrain them to a charset with no
+        # shell metacharacters, path separators, or traversal sequences.
+        if not v or not _IDENTIFIER_RE.fullmatch(v) or ".." in v:
+            raise ValueError(
+                "must be a non-empty identifier of [A-Za-z0-9._-] with no '..'"
+            )
+        return v
 
 
 class CustomizeValidationResponse(BaseModel):

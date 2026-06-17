@@ -75,18 +75,15 @@ def handle_edit(data: dict) -> None:
     _file_rev[file_path] = _file_rev.get(file_path, 0) + 1
 
 
+def _file_entry(fp: str, hunks: list, include_rev: bool) -> dict:
+    entry = {"file_path": fp, "hunks": hunks, "backup": _file_backups.get(fp)}
+    if include_rev:
+        entry["rev"] = _file_rev.get(fp, 0)
+    return entry
+
+
 def handle_peek() -> dict:
-    return {
-        "files": [
-            {
-                "file_path": fp,
-                "hunks": hunks,
-                "backup": _file_backups.get(fp),
-                "rev": _file_rev.get(fp, 0),
-            }
-            for fp, hunks in _files.items()
-        ],
-    }
+    return {"files": [_file_entry(fp, hunks, include_rev=True) for fp, hunks in _files.items()]}
 
 
 def handle_get_state() -> dict:
@@ -94,16 +91,7 @@ def handle_get_state() -> dict:
     # the live poller uses the rev-aware handle_peek(), while get_state is only
     # the one-shot end-of-session drain where revision tracking no longer matters.
     global _files, _file_backups, _file_rev
-    state = {
-        "files": [
-            {
-                "file_path": fp,
-                "hunks": hunks,
-                "backup": _file_backups.get(fp),
-            }
-            for fp, hunks in _files.items()
-        ],
-    }
+    state = {"files": [_file_entry(fp, hunks, include_rev=False) for fp, hunks in _files.items()]}
     _files = {}
     _file_backups = {}
     _file_rev = {}

@@ -14,7 +14,10 @@ from dataclasses import dataclass
 
 
 def diff_id_for(file_path: str) -> str:
-    """Stable per-file id so the frontend updates one box across re-edits."""
+    """Stable per-file id so the frontend updates one box across re-edits. This
+    is only a UI correlation id; it is independent of the daemon's backup-path
+    hashing (the runner receives each backup path from the daemon's peek and
+    never derives it), so the two need not be kept in sync."""
     return hashlib.md5(file_path.encode()).hexdigest()
 
 
@@ -51,13 +54,15 @@ class DiffTracker:
         rec.last_sent_rev = rev
         return True
 
-    def record_decision(self, diff_id: str, approved: bool, rev: int) -> None:
-        """Record a user's decision against the rev they actually reviewed."""
+    def record_decision(self, diff_id: str, approved: bool, rev: int | None = None) -> None:
+        """Record a user's decision against the rev they actually reviewed. If
+        rev is omitted (None), fall back to the latest rev sent for this file so
+        a missing rev still settles the diff instead of hanging until timeout."""
         rec = self.records.get(diff_id)
         if rec is None:
             return
         rec.decision = "approved" if approved else "rejected"
-        rec.decided_at_rev = rev
+        rec.decided_at_rev = rec.last_sent_rev if rev is None else rev
 
     def is_settled(self, rec: DiffRecord) -> bool:
         return rec.decision is not None and rec.decided_at_rev == rec.last_sent_rev
