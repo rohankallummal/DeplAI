@@ -283,7 +283,7 @@ export default function ChatInterface({
             <div className="w-full space-y-5 self-start pt-0 pb-4">
               {state.phase === 'awaiting_decisions' && (
                 <div className="w-full rounded-md bg-amber-500/10 px-3 py-2 text-xs font-medium text-amber-500">
-                  Review the remaining changes above — approve or reject each to finish.
+                  Review the remaining changes — approve or reject each to finish.
                 </div>
               )}
               {(() => {
