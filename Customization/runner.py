@@ -161,6 +161,9 @@ class CustomizationRunner(RunnerBase):
             await self._send_status(StreamStatus.executing)
             logger.info("Starting styler agent")
 
+            if self.context.project_type == "local" and not self._cancelled:
+                await self._capture_iter_snapshot()
+
             self._diffs.reset()
             poller = asyncio.create_task(self._poll_diffs())
             try:
@@ -189,6 +192,7 @@ class CustomizationRunner(RunnerBase):
                 if await self._extract_changes():
                     iteration_changed = True
                     self._changes_made = True
+                await self._announce_file_events()
 
             if not execute_result or not execute_result.get("success"):
                 if iteration_changed:
@@ -341,6 +345,56 @@ class CustomizationRunner(RunnerBase):
             f"cd {self._project_dir}/edited && "
             f"{self._list_tracked_files_cmd()} > {self._project_dir}/.snapshot_files"
         )
+
+    async def _capture_iter_snapshot(self):
+        """Snapshot the tracked-file list at the START of this iteration so the
+        created/deleted notices reflect THIS turn's net change. Distinct from the
+        session .snapshot_files, which stays fixed for save-time deletions."""
+        pd = self._project_dir
+        await asyncio.to_thread(
+            self._container.exec_run,
+            ["sh", "-c",
+             f"cd {pd}/edited && {self._list_tracked_files_cmd()} > {pd}/.iter_snapshot_files"],
+            user="agent",
+        )
+
+    async def _announce_file_events(self):
+        """Emit informational chat notices for files created/deleted this
+        iteration (net vs the per-iteration snapshot). Edited existing files are
+        in both lists, so they produce no notice (they get diff boxes instead)."""
+        pd = self._project_dir
+        script = (
+            f"cd {pd}/edited && "
+            f"{self._list_tracked_files_cmd()} > {pd}/.iter_current_files; "
+            "echo __CREATED__; "
+            f"LC_ALL=C comm -13 {pd}/.iter_snapshot_files {pd}/.iter_current_files; "
+            "echo __DELETED__; "
+            f"LC_ALL=C comm -23 {pd}/.iter_snapshot_files {pd}/.iter_current_files; "
+            f"rm -f {pd}/.iter_current_files"
+        )
+        _, output = await asyncio.to_thread(
+            self._container.exec_run, ["sh", "-c", script], user="agent",
+        )
+        created, deleted = self._parse_file_events(decode_output(output))
+        for path in created:
+            await self._try_send({"type": "file_event", "data": {"action": "created", "path": path}})
+        for path in deleted:
+            await self._try_send({"type": "file_event", "data": {"action": "deleted", "path": path}})
+
+    @staticmethod
+    def _parse_file_events(text: str) -> tuple[list[str], list[str]]:
+        created: list[str] = []
+        deleted: list[str] = []
+        bucket: list[str] | None = None
+        for raw in text.splitlines():
+            line = raw.strip()
+            if line == "__CREATED__":
+                bucket = created
+            elif line == "__DELETED__":
+                bucket = deleted
+            elif bucket is not None and line:
+                bucket.append(line[2:] if line.startswith("./") else line)
+        return created, deleted
 
     async def _extract_changes(self) -> bool:
         """Promote files modified/created since the snapshot into original/ and
