@@ -32,6 +32,7 @@ class StreamStatus(str, Enum):
     preparing = "preparing"
     executing = "executing"
     waiting_diff = "waiting_diff"
+    awaiting_decisions = "awaiting_decisions"
     building = "building"
     build_fixing = "build_fixing"
     completed = "completed"

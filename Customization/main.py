@@ -38,7 +38,10 @@ app.add_middleware(
 customize_contexts: dict[str, CustomizeValidationRequest] = {}
 active_customizations: dict[str, CustomizationRunner] = {}
 
-ACTIVE_STATUSES = frozenset({"running", "executing", "waiting_diff", "building", "build_fixing", "saving"})
+ACTIVE_STATUSES = frozenset({
+    "running", "executing", "waiting_diff", "awaiting_decisions",
+    "building", "build_fixing", "saving",
+})
 
 
 async def verify_api_key(x_api_key: str = Header(None)):
@@ -110,6 +113,7 @@ async def websocket_customize(websocket: WebSocket, project_id: str, token: str 
                     await runner.receive_diff_response(
                         cmd.data.get("diff_id", ""),
                         cmd.data.get("approved", False),
+                        cmd.data.get("rev", 0),
                     )
 
     except (WebSocketDisconnect, RuntimeError):
