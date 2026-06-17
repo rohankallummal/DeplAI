@@ -5,7 +5,7 @@ import { fetchWsToken } from './ws-token';
 
 const WS_BASE_URL = process.env.NEXT_PUBLIC_CUSTOMIZE_WS_URL || 'ws://localhost:8002';
 
-export type CustomizePhase = 'idle' | 'preparing' | 'executing' | 'waiting_diff' | 'building' | 'build_fixing' | 'completed' | 'error' | 'saving';
+export type CustomizePhase = 'idle' | 'preparing' | 'executing' | 'waiting_diff' | 'awaiting_decisions' | 'building' | 'build_fixing' | 'completed' | 'error' | 'saving';
 
 export interface DiffLine {
   type: 'ctx' | 'add' | 'del';
@@ -21,6 +21,7 @@ export interface DiffPreview {
   diff_id: string;
   file_path: string;
   hunks: DiffHunk[];
+  rev: number;
   status: 'pending' | 'approved' | 'rejected';
 }
 
@@ -41,7 +42,6 @@ interface ProjectCustomizeState {
   chatMessages: ChatMessage[];
   projectName: string;
   changesMade: boolean;
-  currentDiff: DiffPreview | null;
   builderStatus: BuilderStatus;
   saveResult: { success: boolean; message: string; url?: string } | null;
 }
@@ -50,7 +50,7 @@ interface CustomizeContextValue {
   startCustomize: (projectId: string, projectName: string) => Promise<void>;
   getCustomizeState: (projectId: string) => ProjectCustomizeState;
   sendChatMessage: (projectId: string, message: string) => void;
-  respondToDiff: (projectId: string, diffId: string, approved: boolean) => void;
+  respondToDiff: (projectId: string, diffId: string, approved: boolean, rev: number) => void;
   resetCustomize: (projectId: string) => void;
   closeCustomize: (projectId: string, discard?: boolean) => Promise<void>;
 }
@@ -70,7 +70,6 @@ const DEFAULT_STATE: ProjectCustomizeState = {
   chatMessages: [],
   projectName: '',
   changesMade: false,
-  currentDiff: null,
   builderStatus: 'idle',
   saveResult: null,
 };
@@ -84,6 +83,7 @@ const STATUS_MAP: Record<string, CustomizePhase> = {
   preparing: 'preparing',
   executing: 'executing',
   waiting_diff: 'waiting_diff',
+  awaiting_decisions: 'awaiting_decisions',
   building: 'building',
   build_fixing: 'build_fixing',
   completed: 'completed',
@@ -146,12 +146,23 @@ export function CustomizeProvider({ children }: { children: React.ReactNode }) {
         }
 
         case 'diff_preview': {
-          const diff: DiffPreview = { ...data.data, status: 'pending' };
-          updateProject(projectId, () => ({ currentDiff: diff, phase: 'waiting_diff' }));
-          addChatMessage(projectId, {
-            role: 'agent',
-            type: 'diff',
-            diff,
+          const incoming = data.data as Omit<DiffPreview, 'status'>;
+          const diff: DiffPreview = { ...incoming, status: 'pending' };
+          updateProject(projectId, existing => {
+            const idx = existing.chatMessages.findIndex(
+              m => m.type === 'diff' && m.diff?.diff_id === incoming.diff_id,
+            );
+            if (idx >= 0) {
+              const chatMessages = existing.chatMessages.slice();
+              chatMessages[idx] = { ...chatMessages[idx], diff };
+              return { chatMessages };
+            }
+            return {
+              chatMessages: [
+                ...existing.chatMessages,
+                { id: genId(), role: 'agent' as const, type: 'diff' as const, diff, timestamp: new Date().toISOString() },
+              ],
+            };
           });
           break;
         }
@@ -276,12 +287,11 @@ export function CustomizeProvider({ children }: { children: React.ReactNode }) {
     }));
   }, []);
 
-  const respondToDiff = useCallback((projectId: string, diffId: string, approved: boolean) => {
+  const respondToDiff = useCallback((projectId: string, diffId: string, approved: boolean, rev: number) => {
     const ws = wsRefs.current[projectId];
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
 
     updateProject(projectId, existing => ({
-      currentDiff: null,
       changesMade: existing.changesMade || approved,
       chatMessages: existing.chatMessages.map(msg =>
         msg.type === 'diff' && msg.diff?.diff_id === diffId
@@ -292,7 +302,7 @@ export function CustomizeProvider({ children }: { children: React.ReactNode }) {
 
     ws.send(JSON.stringify({
       action: 'diff_response',
-      data: { diff_id: diffId, approved },
+      data: { diff_id: diffId, approved, rev },
     }));
   }, []);
 
