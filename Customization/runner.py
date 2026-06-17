@@ -3,10 +3,10 @@ import json
 import logging
 import os
 import queue as thread_queue
-import uuid
 
 from fastapi import WebSocket
 
+from diff_state import DiffTracker, diff_id_for
 from models import CustomizeValidationRequest, StreamStatus
 from runner_base import RunnerBase
 from utils import (
@@ -20,6 +20,10 @@ from publish import save_local_changes, create_customize_pr
 logger = logging.getLogger(__name__)
 
 TOTAL_STEPS = 8
+DIFF_POLL_INTERVAL_SECONDS = 0.7
+# Bounded escape hatch: how long finalize waits for the user to decide remaining
+# diffs before ending the session without saving. Resets on each decision.
+AWAITING_DECISIONS_TIMEOUT_SECONDS = 1800  # 30 min
 
 
 class CustomizationRunner(RunnerBase):
@@ -33,8 +37,8 @@ class CustomizationRunner(RunnerBase):
         self._chat_event = asyncio.Event()
         self._chat_message: str | None = None
 
-        self._diff_response_event = asyncio.Event()
-        self._diff_response_data: dict | None = None
+        self._diffs = DiffTracker()
+        self._decision_event = asyncio.Event()
 
         self._changes_made = False
         self._iteration_changes_made = False
@@ -58,7 +62,7 @@ class CustomizationRunner(RunnerBase):
         # Wake any parked waits so the workflow loop observes cancellation and
         # unwinds instead of leaking a parked coroutine.
         self._chat_event.set()
-        self._diff_response_event.set()
+        self._decision_event.set()
         if self._container:
             try:
                 self._container.exec_run(
@@ -72,9 +76,11 @@ class CustomizationRunner(RunnerBase):
         self._chat_message = message
         self._chat_event.set()
 
-    async def receive_diff_response(self, diff_id: str, approved: bool):
-        self._diff_response_data = {"diff_id": diff_id, "approved": approved}
-        self._diff_response_event.set()
+    async def receive_diff_response(self, diff_id: str, approved: bool, rev: int = 0):
+        # Out-of-band: recorded against the rev the user actually reviewed, so a
+        # concurrent re-edit re-opens the box instead of approving stale content.
+        self._diffs.record_decision(diff_id, approved, rev)
+        self._decision_event.set()
 
     async def _run_pipeline(self) -> bool:
         logger.info("Preparing customize container")
@@ -155,11 +161,23 @@ class CustomizationRunner(RunnerBase):
             await self._send_status(StreamStatus.executing)
             logger.info("Starting styler agent")
 
-            execute_result = await self._run_agent_phase(
-                "execute",
-                extra_args=["--user-request", prompt],
-            )
-            await self._flush_remaining_edits()
+            self._diffs.reset()
+            poller = asyncio.create_task(self._poll_diffs())
+            try:
+                execute_result = await self._run_agent_phase(
+                    "execute",
+                    extra_args=["--user-request", prompt],
+                )
+            finally:
+                poller.cancel()
+                try:
+                    await poller
+                except asyncio.CancelledError:
+                    pass
+
+            await self._finalize_diffs()
+            if self._cancelled:
+                return
 
             # Capture what actually changed on disk this iteration. For local
             # projects the filesystem is the source of truth: the agent may
@@ -195,99 +213,64 @@ class CustomizationRunner(RunnerBase):
                 "changes_made": self._changes_made,
             })
 
-    async def _handle_diff_approval(self, diff_data: dict) -> bool:
-        await self._try_send({
-            "type": "diff_preview",
-            "data": diff_data,
-        })
-        await self._send_status(StreamStatus.waiting_diff)
-
-        self._diff_response_event.clear()
-        await self._diff_response_event.wait()
-
-        approved = bool(
-            self._diff_response_data and self._diff_response_data.get("approved")
-        )
-        if approved:
-            self._changes_made = True
-            self._iteration_changes_made = True
-
-        self._diff_response_data = None
-        await self._send_status(StreamStatus.executing)
-        return approved
-
-    async def _flush_remaining_edits(self):
+    async def _finalize_diffs(self):
+        """After execute exits the agent is the only edit source, so the
+        filesystem is frozen. Take an authoritative final peek, wait until every
+        file is settled (decided at its latest rev) bounded by a timeout, then
+        apply rollbacks for rejected files and drain the daemon."""
         if self._cancelled:
             return
-        try:
-            state = None
-            for _attempt in range(5):
-                ec, output = await asyncio.to_thread(
+
+        await self._emit_pending_diffs()  # authoritative final peek
+
+        if self._diffs.has_unsettled():
+            await self._send_status(StreamStatus.awaiting_decisions)
+        while not self._cancelled:
+            self._decision_event.clear()
+            if not self._diffs.has_unsettled():
+                break
+            try:
+                await asyncio.wait_for(
+                    self._decision_event.wait(),
+                    timeout=AWAITING_DECISIONS_TIMEOUT_SECONDS,
+                )
+            except asyncio.TimeoutError:
+                logger.warning("Awaiting-decisions timed out for %s; ending session", self.project_id)
+                await self._try_send({
+                    "type": "error",
+                    "data": "Review timed out — the session was closed without saving. Please start again.",
+                })
+                await self._send_status(StreamStatus.error)
+                self.cancel()
+                return
+
+        if self._cancelled:
+            return
+
+        for rec in self._diffs.records.values():
+            if rec.decision == "approved":
+                self._changes_made = True
+                self._iteration_changes_made = True
+            elif rec.decision == "rejected" and rec.backup:
+                # -p preserves the pre-edit mtime so _extract_changes does not
+                # re-promote a rejected file.
+                await asyncio.to_thread(
                     self._container.exec_run,
-                    [
-                        "sh", "-c",
-                        "printf '{\"action\":\"get_state\"}' | "
-                        "socat -t5 - UNIX-CONNECT:/workspace/work/hook.sock 2>/dev/null",
-                    ],
+                    ["sh", "-c", f"cp -p '{rec.backup}' '{rec.file_path}'"],
                     user="agent",
                 )
-                if ec == 0:
-                    try:
-                        state = json.loads(decode_output(output))
-                        break
-                    except json.JSONDecodeError:
-                        pass
-                await asyncio.sleep(0.3)
 
-            if not state:
-                return
-
-            files = state.get("files", [])
-            if not files:
-                return
-
-            for file_info in files:
-                if self._cancelled:
-                    return
-                file_path = file_info.get("file_path", "")
-                hunks = file_info.get("hunks", [])
-                backup_path = file_info.get("backup")
-                if not file_path or not hunks:
-                    continue
-
-                hunks.sort(key=self._hunk_sort_key)
-                hunks = self._merge_overlapping_hunks(hunks)
-
-                diff_data = {
-                    "diff_id": str(uuid.uuid4()),
-                    "file_path": file_path,
-                    "hunks": hunks,
-                }
-
-                approved = await self._handle_diff_approval(diff_data)
-                if self._cancelled:
-                    # Closed mid-review: stop here and leave files as-is (close keeps
-                    # files). Without this the loop would park on the next diff's
-                    # approval wait, leaking the workflow task.
-                    return
-                if not approved and backup_path:
-                    # -p preserves the backup's mtime (the pre-edit timestamp,
-                    # older than the snapshot marker) so a rejected-then-restored
-                    # file is not mistaken for a change by _extract_changes, which
-                    # now runs unconditionally and keys off mtime.
-                    await asyncio.to_thread(
-                        self._container.exec_run,
-                        ["sh", "-c", f"cp -p '{backup_path}' '{file_path}'"],
-                        user="agent",
-                    )
-
-            await asyncio.to_thread(
-                self._container.exec_run,
-                ["sh", "-c", "rm -rf /workspace/work/backups"],
-                user="agent",
-            )
-        except Exception as e:
-            logger.debug("Flush remaining edits: %s", e)
+        await asyncio.to_thread(
+            self._container.exec_run,
+            [
+                "sh", "-c",
+                "printf '{\"action\":\"reset\"}' | "
+                "socat -t5 - UNIX-CONNECT:/workspace/work/hook.sock 2>/dev/null; "
+                "rm -rf /workspace/work/backups",
+            ],
+            user="agent",
+        )
+        self._diffs.reset()
 
     @staticmethod
     def _hunk_sort_key(h: dict) -> int | float:
@@ -403,6 +386,56 @@ class CustomizationRunner(RunnerBase):
             promoted, deleted, changed,
         )
         return changed
+
+    async def _peek_daemon(self) -> dict | None:
+        ec, output = await asyncio.to_thread(
+            self._container.exec_run,
+            [
+                "sh", "-c",
+                "printf '{\"action\":\"peek\"}' | "
+                "socat -t5 - UNIX-CONNECT:/workspace/work/hook.sock 2>/dev/null",
+            ],
+            user="agent",
+        )
+        if ec != 0:
+            return None
+        try:
+            return json.loads(decode_output(output))
+        except json.JSONDecodeError:
+            return None
+
+    async def _emit_pending_diffs(self):
+        state = await self._peek_daemon()
+        if not state:
+            return
+        for f in state.get("files", []):
+            file_path = f.get("file_path", "")
+            hunks = f.get("hunks", [])
+            rev = f.get("rev", 0)
+            backup = f.get("backup")
+            if not file_path or not hunks:
+                continue
+            if not self._diffs.reconcile(file_path, rev, backup):
+                continue
+            hunks = sorted(hunks, key=self._hunk_sort_key)
+            hunks = self._merge_overlapping_hunks(hunks)
+            await self._try_send({
+                "type": "diff_preview",
+                "data": {
+                    "diff_id": diff_id_for(file_path),
+                    "file_path": file_path,
+                    "hunks": hunks,
+                    "rev": rev,
+                },
+            })
+
+    async def _poll_diffs(self):
+        while not self._cancelled:
+            try:
+                await self._emit_pending_diffs()
+            except Exception as e:
+                logger.debug("diff poll error: %s", e)
+            await asyncio.sleep(DIFF_POLL_INTERVAL_SECONDS)
 
     async def _run_builder(self):
         self._check_cancelled()
