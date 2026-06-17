@@ -207,7 +207,7 @@ export default function ChatInterface({
     if (!autoApprove) return;
     for (const msg of messages) {
       if (msg.type === 'diff' && msg.diff?.status === 'pending') {
-        respondToDiff(projectId, msg.diff.diff_id, true);
+        respondToDiff(projectId, msg.diff.diff_id, true, msg.diff.rev);
       }
     }
   }, [autoApprove, messages, projectId, respondToDiff]);
@@ -281,6 +281,11 @@ export default function ChatInterface({
             </>
           ) : (
             <div className="w-full space-y-5 self-start pt-0 pb-4">
+              {state.phase === 'awaiting_decisions' && (
+                <div className="w-full rounded-md bg-amber-500/10 px-3 py-2 text-xs font-medium text-amber-500">
+                  Review the remaining changes above — approve or reject each to finish.
+                </div>
+              )}
               {(() => {
                 const firstPendingDiffId = messages.find(
                   m => m.type === 'diff' && m.diff?.status === 'pending'
@@ -299,8 +304,8 @@ export default function ChatInterface({
                 if (msg.type === 'diff' && msg.diff) {
                   const footer = msg.diff.status === 'pending' ? (
                     <ApprovalButtons
-                      onApprove={() => respondToDiff(projectId, msg.diff!.diff_id, true)}
-                      onReject={() => respondToDiff(projectId, msg.diff!.diff_id, false)}
+                      onApprove={() => respondToDiff(projectId, msg.diff!.diff_id, true, msg.diff!.rev)}
+                      onReject={() => respondToDiff(projectId, msg.diff!.diff_id, false, msg.diff!.rev)}
                     />
                   ) : (
                     <span className={`text-xs font-semibold ${msg.diff.status === 'approved' ? 'text-green-400' : 'text-red-400'}`}>
