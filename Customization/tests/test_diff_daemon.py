@@ -25,8 +25,9 @@ def test_peek_is_nondestructive_and_includes_rev():
         "backup": "/bk/a",
         "rev": 3,
     }]
-    # peek must NOT clear state
-    assert dd._files != {}
+    # peek must NOT clear state (pin exact content, not just non-emptiness)
+    assert dd._files == {"/w/a.ts": [{"lines": [{"type": "add", "num": 1, "text": "x"}]}]}
+    assert dd._file_backups == {"/w/a.ts": "/bk/a"}
     assert dd._file_rev == {"/w/a.ts": 3}
 
 

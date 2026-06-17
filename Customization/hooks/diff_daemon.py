@@ -90,6 +90,9 @@ def handle_peek() -> dict:
 
 
 def handle_get_state() -> dict:
+    # Legacy destructive drain. `rev` is intentionally omitted from the payload:
+    # the live poller uses the rev-aware handle_peek(), while get_state is only
+    # the one-shot end-of-session drain where revision tracking no longer matters.
     global _files, _file_backups, _file_rev
     state = {
         "files": [
