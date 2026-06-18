@@ -227,10 +227,16 @@ class CustomizationRunner(RunnerBase):
 
                 if iteration_changed:
                     await self._run_builder()
-                    # The builder may edit files to fix the build; re-capture so
-                    # its changes are promoted into original/ too (idempotent).
+                    # The builder may create/delete/rename files to fix the build;
+                    # surface those as notices (the execute-phase poller is already
+                    # stopped here). File events only — a full poll would wrongly
+                    # render the builder's Edits as reviewable diff boxes.
                     if self.context.project_type == "local" and not self._cancelled:
                         await self._extract_changes()
+                        try:
+                            await self._drain_file_events()
+                        except Exception:
+                            logger.debug("post-builder file-event drain failed", exc_info=True)
 
                 await self._send_status(StreamStatus.completed)
                 await self._send_result({
