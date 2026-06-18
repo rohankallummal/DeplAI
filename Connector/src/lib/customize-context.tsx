@@ -212,14 +212,24 @@ export function CustomizeProvider({ children }: { children: React.ReactNode }) {
 
         case 'file_event': {
           const action = data.data?.action;
+          const kind: string = data.data?.kind || 'file';
           const path: string = data.data?.path || '';
-          const name = path.split('/').pop() || path;
-          const dir = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
-          const content = action === 'deleted'
-            ? `Deleted ${name} from the project.`
-            : dir
-              ? `Created ${name} in ${dir}/.`
-              : `Created ${name} in the project root.`;
+          const baseName = (p: string) => p.split('/').pop() || p;
+          const dirOf = (p: string) => (p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : '');
+          const name = baseName(path);
+          const noun = kind === 'folder' ? 'folder ' : '';
+          let content: string;
+          if (action === 'deleted') {
+            content = `Deleting ${noun}${name}.`;
+          } else if (action === 'renamed') {
+            const from = baseName(data.data?.from || '');
+            content = `Renaming ${noun}${from} to ${name}.`;
+          } else {
+            const dir = dirOf(path);
+            content = dir
+              ? `Creating ${noun}${name} in ${dir}/.`
+              : `Creating ${noun}${name} in the project root.`;
+          }
           addChatMessage(projectId, { role: 'agent', type: 'file_event', content });
           break;
         }
