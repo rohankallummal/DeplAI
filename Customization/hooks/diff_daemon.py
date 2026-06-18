@@ -1,25 +1,32 @@
 #!/usr/bin/env python3
+"""Gate daemon for per-edit review.
 
-import hashlib
+Each Edit tool call (PreToolUse) registers a "gate" keyed by an incrementing
+request id. The gate stays `pending` until the user approves or rejects it (the
+runner forwards the decision via `decide`). The PreToolUse hook blocks the agent
+by polling `poll` until the gate resolves, so edits are reviewed one at a time
+before they apply.
+
+Two flags short-circuit the gate to auto-approve (the agent runs without
+blocking): `grant_all` is the user's session-wide "apply everything" choice, and
+`bypass` is set by the runner around the builder phase (whose edits must not be
+gated).
+"""
 import json
 import os
-import shutil
 import signal
 import socket
 import sys
 
 BASE = "/workspace/work"
 SOCK_PATH = os.path.join(BASE, "hook.sock")
-BACKUPS_DIR = os.path.join(BASE, "backups")
 CONTEXT = 3
+PREVIEW_LINES = 50
 
-_files: dict[str, list] = {}
-_file_backups: dict[str, str] = {}
-_file_rev: dict[str, int] = {}
-
-
-def _backup_path_for(file_path: str) -> str:
-    return os.path.join(BACKUPS_DIR, hashlib.md5(file_path.encode()).hexdigest())
+_gates: dict[int, dict] = {}   # request_id -> {request_id, file_path, hunks, decision, emitted}
+_next_id = 0
+_grant_all = False
+_bypass = False
 
 
 def _locate_block(file_lines: list[str], old_s: str) -> int:
@@ -83,58 +90,127 @@ def build_hunk(fp: str, old_s: str, new_s: str) -> dict:
     return {"lines": lines}
 
 
-def handle_edit(data: dict) -> None:
-    tool_input = data.get("tool_input", data)
-    file_path = tool_input.get("file_path", "")
-    old_string = tool_input.get("old_string", "")
-    new_string = tool_input.get("new_string", "")
-
-    if not file_path:
-        return
-
-    if file_path not in _files:
-        try:
-            os.makedirs(BACKUPS_DIR, exist_ok=True)
-            backup_path = _backup_path_for(file_path)
-            shutil.copy2(file_path, backup_path)
-            _file_backups[file_path] = backup_path
-        except Exception:
-            pass
-        _files[file_path] = []
-
-    hunk = build_hunk(file_path, old_string, new_string)
-    _files[file_path].append(hunk)
-    _file_rev[file_path] = _file_rev.get(file_path, 0) + 1
+def build_write_preview(content: str) -> tuple[dict, int]:
+    """Preview for a Write: the first PREVIEW_LINES lines of the new content as
+    additions, plus the count of lines beyond the preview (for the "... additional
+    lines omitted" notice)."""
+    lines = content.split("\n")
+    if lines and lines[-1] == "":
+        lines = lines[:-1]   # drop the empty element a trailing newline produces
+    preview = lines[:PREVIEW_LINES]
+    omitted = max(0, len(lines) - PREVIEW_LINES)
+    hunk = {"lines": [{"type": "add", "num": i + 1, "text": text} for i, text in enumerate(preview)]}
+    return hunk, omitted
 
 
-def _file_entry(fp: str, hunks: list, include_rev: bool) -> dict:
-    entry = {"file_path": fp, "hunks": hunks, "backup": _file_backups.get(fp)}
-    if include_rev:
-        entry["rev"] = _file_rev.get(fp, 0)
-    return entry
+def _has_changes(hunk: dict) -> bool:
+    return any(l.get("type") in ("add", "del") for l in hunk.get("lines", []))
 
 
-def handle_peek() -> dict:
-    return {"files": [_file_entry(fp, hunks, include_rev=True) for fp, hunks in _files.items()]}
+def handle_gate(data: dict) -> dict:
+    """Register a gate and return its request id. Edits build an old/new hunk;
+    Writes build a content preview (new file or overwrite). Auto-approves when a
+    short-circuit flag is set or when there is nothing to review."""
+    global _next_id
+    tool_name = data.get("tool_name", "Edit")
+    tool_input = data.get("tool_input", {})
+    fp = tool_input.get("file_path", "")
+
+    new_file = overwrite = False
+    omitted = 0
+    if tool_name == "Write":
+        hunk, omitted = build_write_preview(tool_input.get("content", ""))
+        new_file = not os.path.exists(fp)
+        overwrite = not new_file
+    else:
+        hunk = build_hunk(fp, tool_input.get("old_string", ""), tool_input.get("new_string", ""))
+
+    _next_id += 1
+    rid = _next_id
+    auto = _grant_all or _bypass or not _has_changes(hunk)
+    _gates[rid] = {
+        "request_id": rid,
+        "file_path": fp,
+        "hunks": [hunk],
+        "decision": "approved" if auto else "pending",
+        "emitted": False,
+        "new_file": new_file,
+        "overwrite": overwrite,
+        "omitted": omitted,
+    }
+    return {"request_id": rid}
 
 
-def handle_get_state() -> dict:
-    # Legacy destructive drain. `rev` is intentionally omitted from the payload:
-    # the live poller uses the rev-aware handle_peek(), while get_state is only
-    # the one-shot end-of-session drain where revision tracking no longer matters.
-    global _files, _file_backups, _file_rev
-    state = {"files": [_file_entry(fp, hunks, include_rev=False) for fp, hunks in _files.items()]}
-    _files = {}
-    _file_backups = {}
-    _file_rev = {}
-    return state
+def handle_poll(data: dict) -> dict:
+    """Return the current decision for a gate. Unknown ids resolve to rejected so
+    a stale poll (e.g. after a reset) never wedges the agent indefinitely."""
+    rid = data.get("request_id")
+    gate = _gates.get(rid)
+    if gate is None:
+        return {"decision": "rejected"}
+    if (_grant_all or _bypass) and gate["decision"] == "pending":
+        gate["decision"] = "approved"
+    return {"decision": gate["decision"]}
+
+
+def handle_decide(data: dict) -> dict:
+    rid = data.get("request_id")
+    approved = bool(data.get("approved", False))
+    gate = _gates.get(rid)
+    if gate is not None and gate["decision"] == "pending":
+        gate["decision"] = "approved" if approved else "rejected"
+    return {"status": "ok"}
+
+
+def _approve_pending() -> None:
+    """Release every still-pending gate (used when a short-circuit flag turns on)."""
+    for gate in _gates.values():
+        if gate["decision"] == "pending":
+            gate["decision"] = "approved"
+
+
+def handle_grant_all() -> dict:
+    global _grant_all
+    _grant_all = True
+    _approve_pending()
+    return {"status": "ok"}
+
+
+def handle_bypass(data: dict) -> dict:
+    """Runner-controlled auto-approve, set around the builder phase so its edits
+    apply without surfacing reviewable boxes."""
+    global _bypass
+    _bypass = bool(data.get("on", False))
+    if _bypass:
+        _approve_pending()
+    return {"status": "ok"}
+
+
+def handle_list_pending() -> dict:
+    """Return gates the runner has not seen yet (marking them emitted), so each
+    edit surfaces as exactly one diff box."""
+    out = []
+    for gate in _gates.values():
+        if not gate["emitted"]:
+            gate["emitted"] = True
+            out.append({
+                "request_id": gate["request_id"],
+                "file_path": gate["file_path"],
+                "hunks": gate["hunks"],
+                "decision": gate["decision"],
+                "new_file": gate.get("new_file", False),
+                "overwrite": gate.get("overwrite", False),
+                "omitted": gate.get("omitted", 0),
+            })
+    return {"gates": out}
 
 
 def handle_reset() -> None:
-    global _files, _file_backups, _file_rev
-    _files = {}
-    _file_backups = {}
-    _file_rev = {}
+    """Clear gates between iterations. `grant_all` is intentionally preserved —
+    it is the user's session-wide choice."""
+    global _gates, _next_id
+    _gates = {}
+    _next_id = 0
 
 
 def run_server() -> None:
@@ -148,7 +224,7 @@ def run_server() -> None:
     server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     server.bind(SOCK_PATH)
     os.chmod(SOCK_PATH, 0o777)
-    server.listen(5)
+    server.listen(16)
 
     def shutdown(_signum, _frame):
         server.close()
@@ -172,25 +248,28 @@ def run_server() -> None:
                 chunks.append(chunk)
             raw = b"".join(chunks)
 
-            if not raw:
-                conn.sendall(b'{"status":"ok"}')
-                continue
-
-            data = json.loads(raw)
+            data = json.loads(raw) if raw else {}
             action = data.get("action")
 
-            if action == "peek":
-                state = handle_peek()
-                conn.sendall(json.dumps(state).encode())
-            elif action == "get_state":
-                state = handle_get_state()
-                conn.sendall(json.dumps(state).encode())
+            if action == "gate":
+                resp = handle_gate(data)
+            elif action == "poll":
+                resp = handle_poll(data)
+            elif action == "decide":
+                resp = handle_decide(data)
+            elif action == "grant_all":
+                resp = handle_grant_all()
+            elif action == "bypass":
+                resp = handle_bypass(data)
+            elif action == "list_pending":
+                resp = handle_list_pending()
             elif action == "reset":
                 handle_reset()
-                conn.sendall(b'{"status":"ok"}')
+                resp = {"status": "ok"}
             else:
-                handle_edit(data)
-                conn.sendall(b'{"status":"ok"}')
+                resp = {"status": "ok"}
+
+            conn.sendall(json.dumps(resp).encode())
         except Exception:
             try:
                 conn.sendall(b'{"status":"ok"}')

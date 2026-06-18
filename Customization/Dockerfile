@@ -18,12 +18,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 RUN useradd -m -s /bin/bash agent
 
 RUN mkdir -p /home/agent/.claude && \
-    printf '{"ackTos":true,"hooks":{"PreToolUse":[{"matcher":"Edit","hooks":[{"type":"command","command":"/app/hooks/diff_hook.sh"}]}]}}\n' \
+    printf '{"ackTos":true,"hooks":{"PreToolUse":[{"matcher":"Edit|Write","hooks":[{"type":"command","command":"python3 /app/hooks/diff_gate.py","timeout":1860}]}]}}\n' \
     > /home/agent/.claude/settings.json && \
     chown -R agent:agent /home/agent/.claude
 
 COPY . .
-RUN chmod +x /app/hooks/diff_hook.sh
 
 EXPOSE 8002
 

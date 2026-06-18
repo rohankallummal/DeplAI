@@ -11,6 +11,7 @@ import ctypes
 import ctypes.util
 import json
 import os
+import re
 import signal
 import socket
 import struct
@@ -36,6 +37,12 @@ EXCLUDE_DIRS = {
     "__pycache__", ".venv", "venv", ".turbo", ".swc", ".git",
 }
 
+# Atomic-write temp files, e.g. "analytics.css.tmp.139.4036a301c7c7": the agent's
+# Write tool writes one then renames it onto the real path. Dropping the temp
+# create and the temp side of the rename leaves the rename's real destination to
+# surface as a single "created" event, instead of a noisy create-temp + rename.
+_TMP_RE = re.compile(r"\.tmp\.\d+\.[0-9a-fA-F]+$")
+
 _HDR = struct.Struct("iIII")  # wd, mask, cookie, name_len
 
 _libc = ctypes.CDLL(ctypes.util.find_library("c") or "libc.so.6", use_errno=True)
@@ -55,7 +62,12 @@ class Watcher:
         self.events: list[dict] = []
         self.seq = 0
         self.lock = threading.Lock()
+        # Paths that already exist, so a later create/rename onto one is recognized
+        # as a modification of a pre-existing file (already shown by its diff box)
+        # rather than a spurious "created" event.
+        self.known: set[str] = set()
         self._add_recursive(self.root)
+        self._seed_known()
 
     def _excluded(self, path: str) -> bool:
         rel = os.path.relpath(path, self.root)
@@ -81,6 +93,19 @@ class Watcher:
 
     def _rel(self, path: str) -> str:
         return os.path.relpath(path, self.root)
+
+    def _is_temp(self, path: str) -> bool:
+        return bool(_TMP_RE.search(os.path.basename(path)))
+
+    def _seed_known(self) -> None:
+        """Record every file and directory present at startup. Runtime watches
+        added for newly-created directories deliberately do NOT seed known, so
+        files written into a brand-new folder still report as created."""
+        for dirpath, dirnames, filenames in os.walk(self.root):
+            dirnames[:] = [d for d in dirnames if d not in EXCLUDE_DIRS]
+            self.known.add(dirpath)
+            for f in filenames:
+                self.known.add(os.path.join(dirpath, f))
 
     def _push(self, ev: dict) -> None:
         with self.lock:
@@ -128,14 +153,20 @@ class Watcher:
             path = os.path.join(base, name) if name else base
             if self._excluded(path):
                 continue
+            # Drop atomic-write temp files. Skipping the temp MOVED_FROM leaves its
+            # paired MOVED_TO (the real file) with no source, so it is reported as a
+            # plain "created" below — one clean notice per written file.
+            if self._is_temp(path):
+                continue
             batch.append((mask, cookie, path, wd))
 
         for mask, cookie, path, _wd in batch:
             if mask & IN_CREATE:
                 if mask & IN_ISDIR:
                     self._add_recursive(path)
-                self._push({"action": "created", "kind": self._kind(mask), "path": self._rel(path)})
+                self._emit_appearance(mask, path)
             elif mask & IN_DELETE:
+                self.known.discard(path)
                 self._push({"action": "deleted", "kind": self._kind(mask), "path": self._rel(path)})
             elif mask & IN_MOVED_FROM:
                 pending_from[cookie] = (path, mask)
@@ -144,15 +175,31 @@ class Watcher:
                 if mask & IN_ISDIR:
                     self._add_recursive(path)
                 if src is not None:
+                    # Genuine rename within the tree.
+                    self.known.discard(src[0])
+                    self.known.add(path)
                     self._push({"action": "renamed", "kind": self._kind(mask),
                                 "from": self._rel(src[0]), "to": self._rel(path),
                                 "path": self._rel(path)})
                 else:
-                    self._push({"action": "created", "kind": self._kind(mask), "path": self._rel(path)})
+                    # Appeared via rename with no in-tree source — e.g. an atomic
+                    # write (temp dropped above). New path => created; known path =>
+                    # an edit/overwrite of an existing file, shown by its diff box.
+                    self._emit_appearance(mask, path)
 
         # A MOVED_FROM with no MOVED_TO in this batch == moved out of the tree.
-        for _cookie, (path, mask) in pending_from.items():
+        for path, mask in pending_from.values():
+            self.known.discard(path)
             self._push({"action": "deleted", "kind": self._kind(mask), "path": self._rel(path)})
+
+    def _emit_appearance(self, mask: int, path: str) -> None:
+        """A file/dir appeared at path. Report it as "created" only if the path is
+        new; a path that already existed is a modification of an existing file
+        (represented by its diff box), so it is not surfaced as a file event."""
+        if path in self.known:
+            return
+        self.known.add(path)
+        self._push({"action": "created", "kind": self._kind(mask), "path": self._rel(path)})
 
 
 def serve(watcher: Watcher) -> None:

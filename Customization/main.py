@@ -39,8 +39,7 @@ customize_contexts: dict[str, CustomizeValidationRequest] = {}
 active_customizations: dict[str, CustomizationRunner] = {}
 
 ACTIVE_STATUSES = frozenset({
-    "running", "executing", "waiting_diff", "awaiting_decisions",
-    "building", "build_fixing", "saving",
+    "running", "executing", "building", "build_fixing", "saving",
 })
 
 
@@ -111,10 +110,11 @@ async def websocket_customize(websocket: WebSocket, project_id: str, token: str 
                     await runner.receive_chat_message(cmd.data.get("message", ""))
                 elif cmd.action == "diff_response" and cmd.data:
                     await runner.receive_diff_response(
-                        cmd.data.get("diff_id", ""),
+                        cmd.data.get("request_id"),
                         cmd.data.get("approved", False),
-                        cmd.data.get("rev"),
                     )
+                elif cmd.action == "grant_all":
+                    await runner.receive_grant_all()
 
     except (WebSocketDisconnect, RuntimeError):
         logger.info("WebSocket disconnected for project %s", project_id)

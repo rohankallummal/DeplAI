@@ -39,7 +39,7 @@ class CustomizeValidationResponse(BaseModel):
 
 
 class WebSocketCommand(BaseModel):
-    action: Literal["start", "chat", "diff_response"]
+    action: Literal["start", "chat", "diff_response", "grant_all"]
     data: Optional[dict] = None
 
 
@@ -47,8 +47,6 @@ class StreamStatus(str, Enum):
     running = "running"
     preparing = "preparing"
     executing = "executing"
-    waiting_diff = "waiting_diff"
-    awaiting_decisions = "awaiting_decisions"
     building = "building"
     build_fixing = "build_fixing"
     completed = "completed"

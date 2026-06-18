@@ -3,10 +3,10 @@ import json
 import logging
 import os
 import queue as thread_queue
+import shlex
 
 from fastapi import WebSocket
 
-from diff_state import DiffTracker, diff_id_for
 from models import CustomizeValidationRequest, StreamStatus
 from runner_base import RunnerBase, CancelledError
 from utils import (
@@ -21,9 +21,18 @@ logger = logging.getLogger(__name__)
 
 TOTAL_STEPS = 8
 DIFF_POLL_INTERVAL_SECONDS = 0.7
-# Bounded escape hatch: how long finalize waits for the user to decide remaining
-# diffs before ending the session without saving. Resets on each decision.
-AWAITING_DECISIONS_TIMEOUT_SECONDS = 1800  # 30 min
+HOOK_SOCK = "/workspace/work/hook.sock"
+FSEVENTS_SOCK = "/workspace/work/fsevents.sock"
+
+
+def _socat_send(sock_path: str, payload: dict) -> str:
+    """Shell snippet that sends one JSON payload to a unix socket and prints the
+    response. shlex.quote keeps the payload intact in the shell."""
+    body = json.dumps(payload)
+    return (
+        f"printf '%s' {shlex.quote(body)} | "
+        f"socat -t5 - UNIX-CONNECT:{sock_path} 2>/dev/null"
+    )
 
 
 class CustomizationRunner(RunnerBase):
@@ -37,11 +46,7 @@ class CustomizationRunner(RunnerBase):
         self._chat_event = asyncio.Event()
         self._chat_message: str | None = None
 
-        self._diffs = DiffTracker()
-        self._decision_event = asyncio.Event()
-
         self._changes_made = False
-        self._iteration_changes_made = False
 
     @property
     def changes_made(self) -> bool:
@@ -62,7 +67,6 @@ class CustomizationRunner(RunnerBase):
         # Wake any parked waits so the workflow loop observes cancellation and
         # unwinds instead of leaking a parked coroutine.
         self._chat_event.set()
-        self._decision_event.set()
         if self._container:
             try:
                 self._container.exec_run(
@@ -76,11 +80,17 @@ class CustomizationRunner(RunnerBase):
         self._chat_message = message
         self._chat_event.set()
 
-    async def receive_diff_response(self, diff_id: str, approved: bool, rev: int | None = None):
-        # Out-of-band: recorded against the rev the user actually reviewed, so a
-        # concurrent re-edit re-opens the box instead of approving stale content.
-        self._diffs.record_decision(diff_id, approved, rev)
-        self._decision_event.set()
+    async def receive_diff_response(self, request_id: int | None, approved: bool):
+        # Forward the decision to the gate daemon, which releases the blocked
+        # PreToolUse hook so the edit applies (approved) or is dropped (rejected).
+        if request_id is None:
+            return
+        await self._daemon_request({"action": "decide", "request_id": request_id, "approved": approved})
+
+    async def receive_grant_all(self):
+        # Session-wide "apply everything": the daemon auto-approves every pending
+        # and future gate, so the agent runs free while the user just watches.
+        await self._daemon_request({"action": "grant_all"})
 
     async def _run_pipeline(self) -> bool:
         logger.info("Preparing customize container")
@@ -164,7 +174,6 @@ class CustomizationRunner(RunnerBase):
             prompt = self._chat_message
             self._chat_event.clear()
             self._chat_message = None
-            self._iteration_changes_made = False
 
             if prompt is None:
                 continue
@@ -175,7 +184,11 @@ class CustomizationRunner(RunnerBase):
             if self.context.project_type == "local" and not self._cancelled:
                 await self._reset_file_events()
 
-            self._diffs.reset()
+            # Fresh gate registry for this iteration. The agent now blocks on each
+            # Edit (PreToolUse gate) until the user decides, so diffs are reviewed
+            # one at a time and the execute call only returns once every gate is
+            # resolved — no end-of-run "awaiting decisions" wait is needed.
+            await self._reset_gates()
             poller = asyncio.create_task(self._poll_diffs())
             try:
                 execute_result = await self._run_agent_phase(
@@ -189,28 +202,30 @@ class CustomizationRunner(RunnerBase):
                 except asyncio.CancelledError:
                     pass
 
+            # Surface any final gate box the poller may not have emitted yet.
+            try:
+                await self._emit_gates()
+            except Exception:
+                logger.debug("final gate emit failed", exc_info=True)
+
             if self.context.project_type == "local" and not self._cancelled:
                 try:
                     await self._drain_file_events()
                 except Exception:
                     logger.debug("final file-event drain failed", exc_info=True)
 
-            # Post-execute processing is guarded: a transient container/exec
-            # error in finalize, extraction, or the builder must surface as an
-            # error to the user and let the session continue, not silently kill
-            # the pipeline task. CancelledError (timeout / user close) propagates
-            # to unwind normally.
+            # Post-execute processing is guarded: a transient container/exec error
+            # in extraction or the builder must surface as an error to the user and
+            # let the session continue, not silently kill the pipeline task.
+            # CancelledError (user close) propagates to unwind normally.
             try:
-                await self._finalize_diffs()
                 self._check_cancelled()
 
-                # Capture what actually changed on disk this iteration. For local
-                # projects the filesystem is the source of truth: the agent may
-                # create / delete / rename / recreate files via Write, rm, mv or
-                # shell commands — operations that never set the Edit-approval
-                # flag. So run extraction unconditionally and derive the change
-                # state from what was promoted or deleted, not from approved Edits.
-                iteration_changed = self._iteration_changes_made
+                # The filesystem is the source of truth: approved edits applied,
+                # rejected edits never did, and Write / rm / mv changes leave no
+                # approval flag. Derive the change state from what extraction
+                # promoted or deleted, not from per-edit decisions.
+                iteration_changed = False
                 if self.context.project_type == "local" and not self._cancelled:
                     if await self._extract_changes():
                         iteration_changed = True
@@ -226,11 +241,15 @@ class CustomizationRunner(RunnerBase):
                         continue
 
                 if iteration_changed:
-                    await self._run_builder()
-                    # The builder may create/delete/rename files to fix the build;
-                    # surface those as notices (the execute-phase poller is already
-                    # stopped here). File events only — a full poll would wrongly
-                    # render the builder's Edits as reviewable diff boxes.
+                    # Builder edits must not be gated, so flip the daemon to bypass
+                    # (auto-approve) around the build phase. The execute-phase poller
+                    # is already stopped, so the builder's edits surface as nothing
+                    # more than file-event notices.
+                    await self._set_bypass(True)
+                    try:
+                        await self._run_builder()
+                    finally:
+                        await self._set_bypass(False)
                     if self.context.project_type == "local" and not self._cancelled:
                         await self._extract_changes()
                         try:
@@ -250,105 +269,6 @@ class CustomizationRunner(RunnerBase):
                 await self._try_send({"type": "error", "data": "Something went wrong. Please try again."})
                 await self._send_status(StreamStatus.error)
                 continue
-
-    async def _finalize_diffs(self):
-        """After execute exits the agent is the only edit source, so the
-        filesystem is frozen. Take an authoritative final peek, wait until every
-        file is settled (decided at its latest rev) bounded by a timeout, then
-        apply rollbacks for rejected files and drain the daemon."""
-        if self._cancelled:
-            return
-
-        # Authoritative final peek. The agent has exited, so this snapshot is
-        # complete — but a single missed peek here could let last-moment edits be
-        # finalized without review, so retry a few times on transient failure.
-        for _attempt in range(5):
-            if await self._emit_pending_diffs():
-                break
-            await asyncio.sleep(0.3)
-
-        if self._diffs.has_unsettled():
-            await self._send_status(StreamStatus.awaiting_decisions)
-        while not self._cancelled:
-            self._decision_event.clear()
-            if not self._diffs.has_unsettled():
-                break
-            try:
-                await asyncio.wait_for(
-                    self._decision_event.wait(),
-                    timeout=AWAITING_DECISIONS_TIMEOUT_SECONDS,
-                )
-            except asyncio.TimeoutError:
-                logger.warning("Awaiting-decisions timed out for %s; ending session", self.project_id)
-                await self._try_send({
-                    "type": "error",
-                    "data": "Review timed out — the session was closed without saving. Please start again.",
-                })
-                await self._send_status(StreamStatus.error)
-                self.cancel()
-                return
-
-        if self._cancelled:
-            return
-
-        for rec in self._diffs.records.values():
-            if self._cancelled:
-                return
-            if rec.decision == "approved":
-                self._changes_made = True
-                self._iteration_changes_made = True
-            elif rec.decision == "rejected":
-                if not rec.backup:
-                    logger.warning(
-                        "Rejected diff for %s has no backup; cannot restore "
-                        "pre-edit content", rec.file_path,
-                    )
-                    continue
-                # argv form (no shell) so a path with quotes/spaces can't break
-                # the command or inject. -p preserves the pre-edit mtime so
-                # _extract_changes does not re-promote a rejected file.
-                await asyncio.to_thread(
-                    self._container.exec_run,
-                    ["cp", "-p", rec.backup, rec.file_path],
-                    user="agent",
-                )
-
-        await asyncio.to_thread(
-            self._container.exec_run,
-            ["sh", "-c", self._daemon_socat("reset") + "; rm -rf /workspace/work/backups"],
-            user="agent",
-        )
-        self._diffs.reset()
-
-    @staticmethod
-    def _hunk_sort_key(h: dict) -> int | float:
-        for line in h.get("lines", []):
-            if "num" in line:
-                return line["num"]
-        return float("inf")
-
-    @staticmethod
-    def _merge_overlapping_hunks(hunks: list) -> list:
-        if len(hunks) <= 1:
-            return hunks
-        merged = [{"lines": list(hunks[0]["lines"])}]
-        for hunk in hunks[1:]:
-            prev = merged[-1]
-            prev_lines = prev["lines"]
-            curr_lines = list(hunk["lines"])
-            if not prev_lines or not curr_lines:
-                merged.append({"lines": curr_lines})
-                continue
-            prev_max = max(l["num"] for l in prev_lines)
-            curr_min = min(l["num"] for l in curr_lines)
-            if curr_min <= prev_max:
-                curr_edit_nums = set(l["num"] for l in curr_lines if l["type"] != "ctx")
-                trimmed_prev = [l for l in prev_lines if not (l["type"] == "ctx" and l["num"] in curr_edit_nums)]
-                trimmed_curr = [l for l in curr_lines if not (l["type"] == "ctx" and l["num"] <= prev_max)]
-                prev["lines"] = trimmed_prev + trimmed_curr
-            else:
-                merged.append({"lines": curr_lines})
-        return merged
 
     _EXTRACT_EXCLUDE_DIRS = [
         "node_modules", ".next", "dist", "build",
@@ -384,13 +304,14 @@ class CustomizationRunner(RunnerBase):
         )
 
     async def _extract_changes(self) -> bool:
-        """Promote files modified/created since the snapshot into original/ and
-        recompute .deletions, then report whether anything changed this pass.
+        """Promote files modified/created since the snapshot into original/, prune
+        promoted files that no longer exist in edited/, and recompute .deletions,
+        then report whether anything changed this pass.
 
         Filesystem-based and tool-agnostic: it captures Write / rm / mv / shell
         operations as well as Edits. Returns True iff at least one file was
-        promoted or recorded as deleted — the caller uses this to drive the
-        session change state (which gates the Save / exit-unsaved warning)."""
+        promoted, pruned, or recorded as deleted — the caller uses this to drive
+        the session change state (which gates the Save / exit-unsaved warning)."""
         pd = self._project_dir
         prunes = self._find_prunes()
         script = (
@@ -402,6 +323,20 @@ class CustomizationRunner(RunnerBase):
             f"  mkdir -p \"{pd}/original/$(dirname \"$f\")\"; "
             f"  cp \"$f\" \"{pd}/original/$f\"; "
             f"done < {pd}/.changed_files; "
+            # Prune promoted files whose source no longer exists in edited/.
+            # .deletions (below) only covers files present in the session baseline,
+            # so a file created AND deleted within the same session would otherwise
+            # linger in original/ and be resurrected by `cp -a original/.` at save.
+            # Empty dirs left behind are removed too, so a deleted folder does not
+            # reappear. .pruned lives outside edited/ and original/.
+            f": > {pd}/.pruned; "
+            f"if [ -d {pd}/original ]; then "
+            f"( cd {pd}/original && find . -mindepth 1 \\( {prunes} \\) -prune -o -type f -print ) | "
+            f"while IFS= read -r f; do "
+            f"  if [ ! -e \"{pd}/edited/$f\" ]; then rm -f \"{pd}/original/$f\" && echo \"$f\" >> {pd}/.pruned; fi; "
+            f"done; "
+            f"find {pd}/original -mindepth 1 -type d -empty -delete 2>/dev/null || true; "
+            f"fi; "
             # Recompute deletions against the fixed snapshot baseline (overwrite,
             # never append). Guard on a NON-EMPTY current listing: an empty/failed
             # scan must not make `comm -23` report every file as deleted, which
@@ -415,15 +350,16 @@ class CustomizationRunner(RunnerBase):
             f"rm -f {pd}/.current_files; "
             f"promoted=$(wc -l < {pd}/.changed_files | tr -dc 0-9); "
             f"deleted=$(wc -l < {pd}/.deletions | tr -dc 0-9); "
-            f"rm -f {pd}/.changed_files; "
-            'echo "EXTRACT_RESULT promoted=${promoted:-0} deleted=${deleted:-0}"'
+            f"pruned=$(wc -l < {pd}/.pruned | tr -dc 0-9); "
+            f"rm -f {pd}/.changed_files {pd}/.pruned; "
+            'echo "EXTRACT_RESULT promoted=${promoted:-0} deleted=${deleted:-0} pruned=${pruned:-0}"'
         )
         ec, output = await asyncio.to_thread(
             self._container.exec_run,
             ["sh", "-c", script],
             user="agent",
         )
-        promoted = deleted = 0
+        promoted = deleted = pruned = 0
         found = False
         for line in decode_output(output).splitlines():
             if line.startswith("EXTRACT_RESULT"):
@@ -433,24 +369,23 @@ class CustomizationRunner(RunnerBase):
                         promoted = int(tok.split("=", 1)[1] or 0)
                     elif tok.startswith("deleted="):
                         deleted = int(tok.split("=", 1)[1] or 0)
+                    elif tok.startswith("pruned="):
+                        pruned = int(tok.split("=", 1)[1] or 0)
         if ec != 0 or not found:
             logger.error(
                 "Extraction did not complete cleanly for %s (exit=%s, parsed=%s); "
-                "promoted/deleted counts may be incomplete", self.project_id, ec, found,
+                "promoted/deleted/pruned counts may be incomplete", self.project_id, ec, found,
             )
-        changed = promoted > 0 or deleted > 0
+        changed = promoted > 0 or deleted > 0 or pruned > 0
         logger.info(
-            "Extracted changes: %d promoted, %d deleted (changed=%s)",
-            promoted, deleted, changed,
+            "Extracted changes: %d promoted, %d deleted, %d pruned (changed=%s)",
+            promoted, deleted, pruned, changed,
         )
         return changed
 
     @staticmethod
     def _fs_socat(action: str) -> str:
-        return (
-            f"printf '{{\"action\":\"{action}\"}}' | "
-            "socat -t5 - UNIX-CONNECT:/workspace/work/fsevents.sock 2>/dev/null"
-        )
+        return _socat_send(FSEVENTS_SOCK, {"action": action})
 
     async def _reset_file_events(self):
         await asyncio.to_thread(
@@ -485,19 +420,10 @@ class CustomizationRunner(RunnerBase):
                 },
             })
 
-    @staticmethod
-    def _daemon_socat(action: str) -> str:
-        """Shell snippet that sends a one-shot JSON action to the diff-daemon
-        socket and prints its response. Shared by peek and reset."""
-        return (
-            f"printf '{{\"action\":\"{action}\"}}' | "
-            "socat -t5 - UNIX-CONNECT:/workspace/work/hook.sock 2>/dev/null"
-        )
-
-    async def _peek_daemon(self) -> dict | None:
+    async def _daemon_request(self, payload: dict) -> dict | None:
         ec, output = await asyncio.to_thread(
             self._container.exec_run,
-            ["sh", "-c", self._daemon_socat("peek")],
+            ["sh", "-c", _socat_send(HOOK_SOCK, payload)],
             user="agent",
         )
         if ec != 0:
@@ -507,44 +433,45 @@ class CustomizationRunner(RunnerBase):
         except json.JSONDecodeError:
             return None
 
-    async def _emit_pending_diffs(self) -> bool:
-        """Peek the daemon and (re)send diff previews for changed files. Returns
-        True if the peek succeeded (so callers can retry on transient failure)."""
-        state = await self._peek_daemon()
-        if state is None:
-            return False
-        for f in state.get("files", []):
-            file_path = f.get("file_path", "")
-            hunks = f.get("hunks", [])
-            rev = f.get("rev", 0)
-            backup = f.get("backup")
-            if not file_path or not hunks:
+    async def _reset_gates(self):
+        await self._daemon_request({"action": "reset"})
+
+    async def _set_bypass(self, on: bool):
+        await self._daemon_request({"action": "bypass", "on": on})
+
+    async def _emit_gates(self):
+        """Pull newly-registered gates from the daemon and emit one diff box per
+        edit (keyed by request_id). Each gate is a single hunk, so no merging or
+        re-open bookkeeping is needed."""
+        resp = await self._daemon_request({"action": "list_pending"})
+        if not resp:
+            return
+        for gate in resp.get("gates", []):
+            request_id = gate.get("request_id")
+            file_path = gate.get("file_path", "")
+            hunks = gate.get("hunks", [])
+            if request_id is None or not file_path or not hunks:
                 continue
-            # Defense in depth: never surface a box with no actual +/- lines
-            # (e.g. a no-op edit). build_hunk already guarantees non-empty for
-            # real edits; this also stops a stale empty box from a prior bug.
+            # Defense in depth: never surface a box with no actual +/- lines.
             if not any(l.get("type") in ("add", "del") for h in hunks for l in h.get("lines", [])):
                 continue
-            if not self._diffs.reconcile(file_path, rev, backup):
-                continue
-            hunks = sorted(hunks, key=self._hunk_sort_key)
-            hunks = self._merge_overlapping_hunks(hunks)
             await self._try_send({
                 "type": "diff_preview",
                 "data": {
-                    "diff_id": diff_id_for(file_path),
+                    "request_id": request_id,
                     "file_path": file_path,
                     "hunks": hunks,
-                    "rev": rev,
+                    "new_file": gate.get("new_file", False),
+                    "overwrite": gate.get("overwrite", False),
+                    "omitted": gate.get("omitted", 0),
                 },
             })
-        return True
 
     async def _poll_diffs(self):
         while not self._cancelled:
             try:
                 await self._drain_file_events()
-                await self._emit_pending_diffs()
+                await self._emit_gates()
             except Exception as e:
                 logger.debug("diff poll error: %s", e)
             await asyncio.sleep(DIFF_POLL_INTERVAL_SECONDS)
@@ -589,10 +516,25 @@ class CustomizationRunner(RunnerBase):
             "ANTHROPIC_API_KEY": os.environ.get("ANTHROPIC_API_KEY", ""),
         }
 
+        def _enqueue_line(text: str):
+            # Each output line is a JSON pipeline message; blanks are ignored and
+            # anything unparseable is surfaced as an error line.
+            text = text.strip()
+            if not text:
+                return
+            try:
+                msg_q.put(json.loads(text))
+            except json.JSONDecodeError:
+                msg_q.put({"type": "error", "content": text})
+
         def _read_exec_output():
             buffer = ""
             try:
-                wrapped_cmd = ["sh", "-c", " ".join(f"'{c}'" for c in cmd) + " 2>&1"]
+                # shlex.quote each arg: the user request / project name may contain
+                # single quotes (e.g. "it's") or other shell metacharacters. Naive
+                # '%s' wrapping breaks the command (unterminated quote) and is a
+                # shell-injection vector. shlex.quote is POSIX-sh safe.
+                wrapped_cmd = ["sh", "-c", " ".join(shlex.quote(c) for c in cmd) + " 2>&1"]
                 _, output = self._container.exec_run(
                     wrapped_cmd, stream=True, workdir="/app", user="agent",
                     environment=environment,
@@ -601,20 +543,8 @@ class CustomizationRunner(RunnerBase):
                     buffer += chunk.decode(errors="replace")
                     while "\n" in buffer:
                         line, buffer = buffer.split("\n", 1)
-                        line = line.strip()
-                        if not line:
-                            continue
-                        try:
-                            parsed = json.loads(line)
-                            msg_q.put(parsed)
-                        except json.JSONDecodeError:
-                            msg_q.put({"type": "error", "content": line})
-                if buffer.strip():
-                    try:
-                        parsed = json.loads(buffer.strip())
-                        msg_q.put(parsed)
-                    except json.JSONDecodeError:
-                        msg_q.put({"type": "error", "content": buffer.strip()})
+                        _enqueue_line(line)
+                _enqueue_line(buffer)
             except Exception as e:
                 logger.debug("Exec stream ended: %s", e)
             finally:
@@ -678,8 +608,9 @@ class CustomizationRunner(RunnerBase):
         if not self._container:
             return
         await asyncio.sleep(0.3)
-        # Always clear the ephemeral work/ socket + backups; on discard also delete
-        # this project's codebase directory (other projects are left untouched).
+        # Always clear the ephemeral work/ directory (daemon sockets, fs events);
+        # on discard also delete this project's codebase directory (other projects
+        # are left untouched).
         targets = "/workspace/work/* /workspace/work/.[!.]* /workspace/work/..?*"
         if discard:
             targets = f"{self._project_dir} {targets}"

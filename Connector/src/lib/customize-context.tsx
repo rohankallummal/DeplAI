@@ -5,7 +5,7 @@ import { fetchWsToken } from './ws-token';
 
 const WS_BASE_URL = process.env.NEXT_PUBLIC_CUSTOMIZE_WS_URL || 'ws://localhost:8002';
 
-export type CustomizePhase = 'idle' | 'preparing' | 'executing' | 'waiting_diff' | 'awaiting_decisions' | 'building' | 'build_fixing' | 'completed' | 'error' | 'saving';
+export type CustomizePhase = 'idle' | 'preparing' | 'executing' | 'building' | 'build_fixing' | 'completed' | 'error' | 'saving';
 
 export interface DiffLine {
   type: 'ctx' | 'add' | 'del';
@@ -18,11 +18,13 @@ export interface DiffHunk {
 }
 
 export interface DiffPreview {
-  diff_id: string;
+  request_id: number;
   file_path: string;
   hunks: DiffHunk[];
-  rev: number;
   status: 'pending' | 'approved' | 'rejected';
+  new_file?: boolean;
+  overwrite?: boolean;
+  omitted?: number;
 }
 
 export interface ChatMessage {
@@ -40,17 +42,17 @@ export type BuilderStatus = 'idle' | 'running' | 'passed' | 'fixing' | 'failed';
 interface ProjectCustomizeState {
   phase: CustomizePhase;
   chatMessages: ChatMessage[];
-  projectName: string;
   changesMade: boolean;
   builderStatus: BuilderStatus;
-  saveResult: { success: boolean; message: string; url?: string } | null;
+  grantAll: boolean;
 }
 
 interface CustomizeContextValue {
-  startCustomize: (projectId: string, projectName: string) => Promise<void>;
+  startCustomize: (projectId: string) => Promise<void>;
   getCustomizeState: (projectId: string) => ProjectCustomizeState;
   sendChatMessage: (projectId: string, message: string) => void;
-  respondToDiff: (projectId: string, diffId: string, approved: boolean, rev: number) => void;
+  respondToDiff: (projectId: string, requestId: number, approved: boolean) => void;
+  grantAllCustomize: (projectId: string) => void;
   resetCustomize: (projectId: string) => void;
   closeCustomize: (projectId: string, discard?: boolean) => Promise<void>;
 }
@@ -68,22 +70,23 @@ export function useCustomize() {
 const DEFAULT_STATE: ProjectCustomizeState = {
   phase: 'idle',
   chatMessages: [],
-  projectName: '',
   changesMade: false,
   builderStatus: 'idle',
-  saveResult: null,
+  grantAll: false,
 };
 
 function genId(): string {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 }
 
+function getOrDefault(states: Record<string, ProjectCustomizeState>, pid: string): ProjectCustomizeState {
+  return states[pid] ?? { ...DEFAULT_STATE };
+}
+
 const STATUS_MAP: Record<string, CustomizePhase> = {
   running: 'idle',
   preparing: 'preparing',
   executing: 'executing',
-  waiting_diff: 'waiting_diff',
-  awaiting_decisions: 'awaiting_decisions',
   building: 'building',
   build_fixing: 'build_fixing',
   completed: 'completed',
@@ -96,12 +99,8 @@ export function CustomizeProvider({ children }: { children: React.ReactNode }) {
   const wsRefs = useRef<Record<string, WebSocket>>({});
 
   const getCustomizeState = useCallback((projectId: string): ProjectCustomizeState => {
-    return states[projectId] || { ...DEFAULT_STATE };
+    return getOrDefault(states, projectId);
   }, [states]);
-
-  function getOrDefault(states: Record<string, ProjectCustomizeState>, pid: string): ProjectCustomizeState {
-    return states[pid] ?? { ...DEFAULT_STATE };
-  }
 
   function updateProject(
     projectId: string,
@@ -146,17 +145,17 @@ export function CustomizeProvider({ children }: { children: React.ReactNode }) {
         }
 
         case 'diff_preview': {
-          const incoming = data.data as Omit<DiffPreview, 'status'>;
-          const diff: DiffPreview = { ...incoming, status: 'pending' };
+          const incoming = data.data as {
+            request_id: number; file_path: string; hunks: DiffHunk[];
+            new_file?: boolean; overwrite?: boolean; omitted?: number;
+          };
           updateProject(projectId, existing => {
-            const idx = existing.chatMessages.findIndex(
-              m => m.type === 'diff' && m.diff?.diff_id === incoming.diff_id,
-            );
-            if (idx >= 0) {
-              const chatMessages = existing.chatMessages.slice();
-              chatMessages[idx] = { ...chatMessages[idx], diff };
-              return { chatMessages };
+            // Each edit is its own gate (unique request_id); de-dupe in case a
+            // poll re-sends it. Under Grant All the box renders read-only/applied.
+            if (existing.chatMessages.some(m => m.type === 'diff' && m.diff?.request_id === incoming.request_id)) {
+              return {};
             }
+            const diff: DiffPreview = { ...incoming, status: existing.grantAll ? 'approved' : 'pending' };
             return {
               chatMessages: [
                 ...existing.chatMessages,
@@ -200,7 +199,6 @@ export function CustomizeProvider({ children }: { children: React.ReactNode }) {
         }
 
         case 'save_result': {
-          updateProject(projectId, () => ({ saveResult: data.data }));
           addChatMessage(projectId, {
             role: 'agent',
             type: 'save_result',
@@ -271,17 +269,9 @@ export function CustomizeProvider({ children }: { children: React.ReactNode }) {
     });
   }
 
-  const startCustomize = useCallback(async (projectId: string, projectName: string) => {
+  const startCustomize = useCallback(async (projectId: string) => {
     wsRefs.current[projectId]?.close();
-
-    setStates(prev => ({
-      ...prev,
-      [projectId]: {
-        ...DEFAULT_STATE,
-        projectName,
-      },
-    }));
-
+    setStates(prev => ({ ...prev, [projectId]: { ...DEFAULT_STATE } }));
   }, []);
 
   const sendChatMessage = useCallback(async (projectId: string, message: string) => {
@@ -311,14 +301,14 @@ export function CustomizeProvider({ children }: { children: React.ReactNode }) {
     }));
   }, []);
 
-  const respondToDiff = useCallback((projectId: string, diffId: string, approved: boolean, rev: number) => {
+  const respondToDiff = useCallback((projectId: string, requestId: number, approved: boolean) => {
     const ws = wsRefs.current[projectId];
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
 
     updateProject(projectId, existing => ({
       changesMade: existing.changesMade || approved,
       chatMessages: existing.chatMessages.map(msg =>
-        msg.type === 'diff' && msg.diff?.diff_id === diffId
+        msg.type === 'diff' && msg.diff?.request_id === requestId
           ? { ...msg, diff: { ...msg.diff!, status: approved ? 'approved' as const : 'rejected' as const } }
           : msg
       ),
@@ -326,8 +316,25 @@ export function CustomizeProvider({ children }: { children: React.ReactNode }) {
 
     ws.send(JSON.stringify({
       action: 'diff_response',
-      data: { diff_id: diffId, approved, rev },
+      data: { request_id: requestId, approved },
     }));
+  }, []);
+
+  const grantAllCustomize = useCallback((projectId: string) => {
+    // Tell the backend to auto-approve every gate for the rest of the session,
+    // and flip any still-pending boxes to read-only ("applied") locally.
+    updateProject(projectId, existing => ({
+      grantAll: true,
+      chatMessages: existing.chatMessages.map(msg =>
+        msg.type === 'diff' && msg.diff?.status === 'pending'
+          ? { ...msg, diff: { ...msg.diff!, status: 'approved' as const } }
+          : msg
+      ),
+    }));
+    const ws = wsRefs.current[projectId];
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ action: 'grant_all' }));
+    }
   }, []);
 
   const resetCustomize = useCallback((projectId: string) => {
@@ -362,9 +369,10 @@ export function CustomizeProvider({ children }: { children: React.ReactNode }) {
     getCustomizeState,
     sendChatMessage,
     respondToDiff,
+    grantAllCustomize,
     resetCustomize,
     closeCustomize,
-  }), [startCustomize, getCustomizeState, sendChatMessage, respondToDiff, resetCustomize, closeCustomize]);
+  }), [startCustomize, getCustomizeState, sendChatMessage, respondToDiff, grantAllCustomize, resetCustomize, closeCustomize]);
 
   return (
     <CustomizeContext.Provider value={value}>

@@ -1,6 +1,6 @@
 import logging
 from pathlib import Path
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from claude_agent_sdk import query, ClaudeAgentOptions
 
@@ -13,7 +13,6 @@ SYSTEM_PROMPT = (PROMPT_DIR / "styler.md").read_text(encoding="utf-8")
 @dataclass
 class StylerResult:
     success: bool
-    files_modified: list[str] = field(default_factory=list)
     error: str | None = None
 
 
@@ -29,7 +28,7 @@ async def run(codebase_path: str, user_request: str) -> StylerResult:
 
     options = ClaudeAgentOptions(
         model="sonnet",
-        allowed_tools=["Read", "Glob", "Grep", "Edit", "Bash"],
+        allowed_tools=["Read", "Write", "Glob", "Grep", "Edit", "Bash"],
         permission_mode="acceptEdits",
         cwd=codebase_path,
         max_turns=80,

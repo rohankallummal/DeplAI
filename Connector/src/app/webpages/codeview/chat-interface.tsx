@@ -45,15 +45,22 @@ function DiffView({ diff, footer }: { diff: DiffPreview; footer?: React.ReactNod
   const removed = allLines.filter(l => l.type === 'del').length;
   if (added === 0 && removed === 0) return null;
   const displayPath = diff.file_path.replace(/^\/workspace\/codebase\/[^/]+\/(edited\/)?/, '');
+  const badge = diff.new_file ? 'New File' : diff.overwrite ? 'Overwrite' : null;
 
   return (
     <div className="my-2 rounded-xl overflow-hidden border border-border bg-white dark:bg-[#161616]">
       <div className="flex items-center justify-between px-3.5 py-2.5 bg-[#f0ead6] dark:bg-[#1c1c1c] border-b border-border">
         <span className="text-xs font-semibold font-mono text-black dark:text-[#e2e8f0] truncate mr-3">{displayPath}</span>
-        <div className="flex gap-2.5 text-[11px] font-mono shrink-0">
-          <span className="text-green-400">+{added}</span>
-          <span className="text-red-400">-{removed}</span>
-        </div>
+        {badge ? (
+          <span className={`text-[11px] font-mono font-semibold px-1.5 py-0.5 rounded shrink-0 ${diff.new_file ? 'bg-green-500/15 text-green-400' : 'bg-amber-500/15 text-amber-400'}`}>
+            {badge}
+          </span>
+        ) : (
+          <div className="flex gap-2.5 text-[11px] font-mono shrink-0">
+            <span className="text-green-400">+{added}</span>
+            <span className="text-red-400">-{removed}</span>
+          </div>
+        )}
       </div>
       <div className="max-h-96 overflow-auto text-xs leading-[21px] font-mono scrollbar-hidden">
         {hunks.map((hunk, hunkIdx) => (
@@ -65,6 +72,11 @@ function DiffView({ diff, footer }: { diff: DiffPreview; footer?: React.ReactNod
           </div>
         ))}
       </div>
+      {diff.omitted ? (
+        <div className="px-3.5 py-1.5 text-[11px] italic font-mono text-neutral-500 dark:text-neutral-400 border-t border-border">
+          … {diff.omitted} additional line{diff.omitted === 1 ? '' : 's'} omitted
+        </div>
+      ) : null}
       {footer && (
         <div className="flex items-center justify-end gap-1.5 px-2.5 py-1 bg-[#f0ead6] dark:bg-[#1c1c1c] border-t border-border">
           {footer}
@@ -192,40 +204,31 @@ export default function ChatInterface({
   onExit: () => void;
   projectId: string;
 }) {
-  const { getCustomizeState, sendChatMessage, respondToDiff } = useCustomize();
+  const { getCustomizeState, sendChatMessage, respondToDiff, grantAllCustomize } = useCustomize();
   const state = getCustomizeState(projectId);
   const [input, setInput] = useState('');
-  const [autoApprove, setAutoApprove] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const messages = state.chatMessages ?? [];
   const phase = state.phase ?? 'idle';
   const builderStatus = state.builderStatus ?? 'idle';
-  const isBusy = ['preparing', 'planning', 'executing', 'building', 'build_fixing', 'saving'].includes(phase);
+  const grantAll = state.grantAll ?? false;
+  const isBusy = ['preparing', 'executing', 'building', 'build_fixing', 'saving'].includes(phase);
   const canSend = !isBusy;
 
   useEffect(() => {
-    if (!autoApprove) return;
-    for (const msg of messages) {
-      if (msg.type === 'diff' && msg.diff?.status === 'pending') {
-        respondToDiff(projectId, msg.diff.diff_id, true, msg.diff.rev);
-      }
-    }
-  }, [autoApprove, messages, projectId, respondToDiff]);
-
-  useEffect(() => {
-    if (autoApprove) return;
+    if (grantAll) return;
 
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Enter' && e.shiftKey && !(e.target instanceof HTMLTextAreaElement)) {
         e.preventDefault();
-        setAutoApprove(true);
+        grantAllCustomize(projectId);
       }
     };
 
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [autoApprove]);
+  }, [grantAll, projectId, grantAllCustomize]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -282,11 +285,6 @@ export default function ChatInterface({
             </>
           ) : (
             <div className="w-full space-y-5 self-start pt-0 pb-4">
-              {state.phase === 'awaiting_decisions' && (
-                <div className="w-full rounded-md bg-amber-500/10 px-3 py-2 text-xs font-medium text-amber-500">
-                  Review the remaining changes — approve or reject each to finish.
-                </div>
-              )}
               {(() => {
                 const firstPendingDiffId = messages.find(
                   m => m.type === 'diff' && m.diff?.status === 'pending'
@@ -311,23 +309,24 @@ export default function ChatInterface({
                 }
 
                 if (msg.type === 'diff' && msg.diff) {
-                  const footer = msg.diff.status === 'pending' ? (
+                  const isPending = msg.diff.status === 'pending' && !grantAll;
+                  const footer = isPending ? (
                     <ApprovalButtons
-                      onApprove={() => respondToDiff(projectId, msg.diff!.diff_id, true, msg.diff!.rev)}
-                      onReject={() => respondToDiff(projectId, msg.diff!.diff_id, false, msg.diff!.rev)}
+                      onApprove={() => respondToDiff(projectId, msg.diff!.request_id, true)}
+                      onReject={() => respondToDiff(projectId, msg.diff!.request_id, false)}
                     />
                   ) : (
-                    <span className={`text-xs font-semibold ${msg.diff.status === 'approved' ? 'text-green-400' : 'text-red-400'}`}>
-                      {msg.diff.status === 'approved' ? 'Approved' : 'Rejected'}
+                    <span className={`text-xs font-semibold ${msg.diff.status === 'rejected' ? 'text-red-400' : 'text-green-400'}`}>
+                      {msg.diff.status === 'rejected' ? 'Rejected' : (grantAll ? 'Applied' : 'Approved')}
                     </span>
                   );
-                  const showAutoApprovePrompt = msg.id === firstPendingDiffId && !autoApprove;
+                  const showGrantAllPrompt = isPending && msg.id === firstPendingDiffId;
                   return (
                     <div key={msg.id} className="pl-7">
                       <DiffView diff={msg.diff} footer={footer} />
-                      {showAutoApprovePrompt && (
+                      {showGrantAllPrompt && (
                         <button
-                          onClick={() => setAutoApprove(true)}
+                          onClick={() => grantAllCustomize(projectId)}
                           className="mt-2 w-full text-center text-base text-muted hover:text-foreground transition cursor-pointer"
                         >
                           Grant permission for all edits during this session? <span className="text-sm opacity-60">(Shift + Enter)</span>

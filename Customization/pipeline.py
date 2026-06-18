@@ -24,11 +24,7 @@ async def run_execute(codebase_path: str, user_request: str):
         _on_message("success", "All changes executed")
     else:
         _on_message("error", f"Execution failed: {result.error}")
-    _emit_result(
-        result.success,
-        "execute",
-        files_modified=result.files_modified,
-    )
+    _emit_result(result.success, "execute")
 
 
 async def run_build(codebase_path: str):

@@ -120,7 +120,7 @@ function RepositoryBrowserContent() {
         body: JSON.stringify(body),
       });
 
-      await startCustomize(projectId, projectName || repo || 'Project');
+      await startCustomize(projectId);
     } catch (err) {
       console.error('Failed to start customization:', err);
     }
