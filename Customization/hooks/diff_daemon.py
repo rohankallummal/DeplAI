@@ -22,32 +22,64 @@ def _backup_path_for(file_path: str) -> str:
     return os.path.join(BACKUPS_DIR, hashlib.md5(file_path.encode()).hexdigest())
 
 
+def _locate_block(file_lines: list[str], old_s: str) -> int:
+    """Return the 0-based start line where old_s occurs, or -1.
+
+    First tries an exact substring match (fast, precise). If that fails —
+    which happens whenever the Edit tool matched old_string whitespace-
+    tolerantly rather than byte-exactly — fall back to comparing line blocks
+    ignoring each line's leading/trailing whitespace, so we still anchor the
+    hunk at the right place."""
+    if not old_s:
+        return -1
+    file_content = "\n".join(file_lines)
+    pos = file_content.find(old_s)
+    if pos >= 0:
+        return file_content[:pos].count("\n")
+    old_lines = old_s.split("\n")
+    target = [l.strip() for l in old_lines]
+    window = len(old_lines)
+    for i in range(0, len(file_lines) - window + 1):
+        if all(file_lines[i + j].strip() == target[j] for j in range(window)):
+            return i
+    return -1
+
+
 def build_hunk(fp: str, old_s: str, new_s: str) -> dict:
-    lines: list = []
     try:
         with open(fp) as f:
             file_lines = f.read().split("\n")
-        file_content = "\n".join(file_lines)
-        pos = file_content.find(old_s)
-        if pos >= 0:
-            start_line = file_content[:pos].count("\n")
-            old_lines = old_s.split("\n") if old_s else []
-            new_lines = new_s.split("\n") if new_s else []
-
-            ctx_start = max(0, start_line - CONTEXT)
-            for i in range(ctx_start, start_line):
-                lines.append({"type": "ctx", "num": i + 1, "text": file_lines[i]})
-            for i, text in enumerate(old_lines):
-                lines.append({"type": "del", "num": start_line + i + 1, "text": text})
-            for i, text in enumerate(new_lines):
-                lines.append({"type": "add", "num": start_line + i + 1, "text": text})
-            end_old = start_line + len(old_lines)
-            end_new = start_line + len(new_lines)
-            ctx_end = min(len(file_lines), end_old + CONTEXT)
-            for i in range(end_old, ctx_end):
-                lines.append({"type": "ctx", "num": end_new + (i - end_old) + 1, "text": file_lines[i]})
     except Exception:
-        pass
+        file_lines = None
+
+    old_lines = old_s.split("\n") if old_s else []
+    new_lines = new_s.split("\n") if new_s else []
+    start_line = _locate_block(file_lines, old_s) if file_lines is not None else -1
+
+    lines: list = []
+    if start_line >= 0:
+        # Anchored: real context around the edit, using the file's own text for
+        # context and deletions (truthful even when old_s drifted on whitespace).
+        ctx_start = max(0, start_line - CONTEXT)
+        for i in range(ctx_start, start_line):
+            lines.append({"type": "ctx", "num": i + 1, "text": file_lines[i]})
+        end_old = start_line + len(old_lines)
+        for i in range(start_line, min(end_old, len(file_lines))):
+            lines.append({"type": "del", "num": i + 1, "text": file_lines[i]})
+        for i, text in enumerate(new_lines):
+            lines.append({"type": "add", "num": start_line + i + 1, "text": text})
+        end_new = start_line + len(new_lines)
+        ctx_end = min(len(file_lines), end_old + CONTEXT)
+        for i in range(end_old, ctx_end):
+            lines.append({"type": "ctx", "num": end_new + (i - end_old) + 1, "text": file_lines[i]})
+    else:
+        # Unanchorable (file unreadable or block not found even tolerantly):
+        # still show the edit so the box is never empty. No context/real line
+        # numbers are available, so number sequentially from 1.
+        for i, text in enumerate(old_lines):
+            lines.append({"type": "del", "num": i + 1, "text": text})
+        for i, text in enumerate(new_lines):
+            lines.append({"type": "add", "num": i + 1, "text": text})
     return {"lines": lines}
 
 

@@ -43,6 +43,7 @@ function DiffView({ diff, footer }: { diff: DiffPreview; footer?: React.ReactNod
   const allLines = hunks.flatMap(h => h.lines);
   const added = allLines.filter(l => l.type === 'add').length;
   const removed = allLines.filter(l => l.type === 'del').length;
+  if (added === 0 && removed === 0) return null;
   const displayPath = diff.file_path.replace(/^\/workspace\/codebase\/[^/]+\/(edited\/)?/, '');
 
   return (

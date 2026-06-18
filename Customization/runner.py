@@ -512,6 +512,11 @@ class CustomizationRunner(RunnerBase):
             backup = f.get("backup")
             if not file_path or not hunks:
                 continue
+            # Defense in depth: never surface a box with no actual +/- lines
+            # (e.g. a no-op edit). build_hunk already guarantees non-empty for
+            # real edits; this also stops a stale empty box from a prior bug.
+            if not any(l.get("type") in ("add", "del") for h in hunks for l in h.get("lines", [])):
+                continue
             if not self._diffs.reconcile(file_path, rev, backup):
                 continue
             hunks = sorted(hunks, key=self._hunk_sort_key)
