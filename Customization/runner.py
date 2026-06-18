@@ -66,7 +66,7 @@ class CustomizationRunner(RunnerBase):
         if self._container:
             try:
                 self._container.exec_run(
-                    ["sh", "-c", "pkill -f pipeline.py; pkill -f diff_daemon"],
+                    ["sh", "-c", "pkill -f pipeline.py; pkill -f diff_daemon; pkill -f fs_watcher"],
                     detach=True,
                 )
             except Exception:
@@ -129,6 +129,17 @@ class CustomizationRunner(RunnerBase):
             user="agent",
             environment={"HOME": "/home/agent"},
         )
+        await asyncio.to_thread(
+            self._container.exec_run,
+            [
+                "sh", "-c",
+                "pkill -f fs_watcher 2>/dev/null; sleep 0.2; "
+                f"nohup python3 /app/hooks/fs_watcher.py {self._project_dir}/edited "
+                "> /dev/null 2>&1 &",
+            ],
+            user="agent",
+            environment={"HOME": "/home/agent"},
+        )
         await asyncio.sleep(0.3)
         logger.info("Diff daemon started")
 
@@ -162,7 +173,7 @@ class CustomizationRunner(RunnerBase):
             logger.info("Starting styler agent")
 
             if self.context.project_type == "local" and not self._cancelled:
-                await self._capture_iter_snapshot()
+                await self._reset_file_events()
 
             self._diffs.reset()
             poller = asyncio.create_task(self._poll_diffs())
@@ -177,6 +188,12 @@ class CustomizationRunner(RunnerBase):
                     await poller
                 except asyncio.CancelledError:
                     pass
+
+            if self.context.project_type == "local" and not self._cancelled:
+                try:
+                    await self._drain_file_events()
+                except Exception:
+                    logger.debug("final file-event drain failed", exc_info=True)
 
             # Post-execute processing is guarded: a transient container/exec
             # error in finalize, extraction, or the builder must surface as an
@@ -198,7 +215,6 @@ class CustomizationRunner(RunnerBase):
                     if await self._extract_changes():
                         iteration_changed = True
                         self._changes_made = True
-                    await self._announce_file_events()
 
                 if not execute_result or not execute_result.get("success"):
                     if iteration_changed:
@@ -361,60 +377,6 @@ class CustomizationRunner(RunnerBase):
             f"{self._list_tracked_files_cmd()} > {self._project_dir}/.snapshot_files"
         )
 
-    async def _capture_iter_snapshot(self):
-        """Snapshot the tracked-file list at the START of this iteration so the
-        created/deleted notices reflect THIS turn's net change. Distinct from the
-        session .snapshot_files, which stays fixed for save-time deletions."""
-        pd = self._project_dir
-        await asyncio.to_thread(
-            self._container.exec_run,
-            ["sh", "-c",
-             f"cd {pd}/edited && {self._list_tracked_files_cmd()} > {pd}/.iter_snapshot_files"],
-            user="agent",
-        )
-
-    async def _announce_file_events(self):
-        """Emit informational chat notices for files created/deleted this
-        iteration (net vs the per-iteration snapshot). Reuses the current-file
-        listing produced by _extract_changes (.current_files) to avoid a second
-        tree scan. Edited existing files are in both lists, so they produce no
-        notice (they get diff boxes instead)."""
-        pd = self._project_dir
-        # Guard on a present, non-empty .current_files so a failed/empty scan
-        # can't emit phantom "deleted" notices for every tracked file.
-        script = (
-            f"if [ -s {pd}/.current_files ] && [ -f {pd}/.iter_snapshot_files ]; then "
-            "echo __CREATED__; "
-            f"LC_ALL=C comm -13 {pd}/.iter_snapshot_files {pd}/.current_files; "
-            "echo __DELETED__; "
-            f"LC_ALL=C comm -23 {pd}/.iter_snapshot_files {pd}/.current_files; "
-            "fi; "
-            f"rm -f {pd}/.current_files"
-        )
-        _, output = await asyncio.to_thread(
-            self._container.exec_run, ["sh", "-c", script], user="agent",
-        )
-        created, deleted = self._parse_file_events(decode_output(output))
-        for path in created:
-            await self._try_send({"type": "file_event", "data": {"action": "created", "path": path}})
-        for path in deleted:
-            await self._try_send({"type": "file_event", "data": {"action": "deleted", "path": path}})
-
-    @staticmethod
-    def _parse_file_events(text: str) -> tuple[list[str], list[str]]:
-        created: list[str] = []
-        deleted: list[str] = []
-        bucket: list[str] | None = None
-        for raw in text.splitlines():
-            line = raw.strip()
-            if line == "__CREATED__":
-                bucket = created
-            elif line == "__DELETED__":
-                bucket = deleted
-            elif bucket is not None and line:
-                bucket.append(line[2:] if line.startswith("./") else line)
-        return created, deleted
-
     async def _extract_changes(self) -> bool:
         """Promote files modified/created since the snapshot into original/ and
         recompute .deletions, then report whether anything changed this pass.
@@ -437,14 +399,14 @@ class CustomizationRunner(RunnerBase):
             # Recompute deletions against the fixed snapshot baseline (overwrite,
             # never append). Guard on a NON-EMPTY current listing: an empty/failed
             # scan must not make `comm -23` report every file as deleted, which
-            # would mass-delete the user's project at save. .current_files is left
-            # in place for _announce_file_events to reuse (one scan, not two); it
-            # lives outside edited/ and original/, so it is neither scanned nor
-            # shipped by `cp -a original/.`.
+            # would mass-delete the user's project at save. .current_files is
+            # removed after use; it lives outside edited/ and original/, so it is
+            # neither scanned nor shipped by `cp -a original/.`.
             f"{self._list_tracked_files_cmd()} > {pd}/.current_files; "
             f"if [ -s {pd}/.current_files ]; then "
             f"LC_ALL=C comm -23 {pd}/.snapshot_files {pd}/.current_files > {pd}/.deletions; "
             f"else : > {pd}/.deletions; fi; "
+            f"rm -f {pd}/.current_files; "
             f"promoted=$(wc -l < {pd}/.changed_files | tr -dc 0-9); "
             f"deleted=$(wc -l < {pd}/.deletions | tr -dc 0-9); "
             f"rm -f {pd}/.changed_files; "
@@ -476,6 +438,46 @@ class CustomizationRunner(RunnerBase):
             promoted, deleted, changed,
         )
         return changed
+
+    @staticmethod
+    def _fs_socat(action: str) -> str:
+        return (
+            f"printf '{{\"action\":\"{action}\"}}' | "
+            "socat -t5 - UNIX-CONNECT:/workspace/work/fsevents.sock 2>/dev/null"
+        )
+
+    async def _reset_file_events(self):
+        await asyncio.to_thread(
+            self._container.exec_run,
+            ["sh", "-c", self._fs_socat("reset")],
+            user="agent",
+        )
+
+    async def _drain_file_events(self):
+        """Drain buffered fs events and emit one chat notice per event, in the
+        chronological order the watcher recorded them."""
+        ec, output = await asyncio.to_thread(
+            self._container.exec_run,
+            ["sh", "-c", self._fs_socat("drain")],
+            user="agent",
+        )
+        if ec != 0:
+            return
+        try:
+            events = json.loads(decode_output(output)).get("events", [])
+        except json.JSONDecodeError:
+            return
+        for ev in events:
+            await self._try_send({
+                "type": "file_event",
+                "data": {
+                    "action": ev.get("action"),
+                    "kind": ev.get("kind", "file"),
+                    "path": ev.get("path", ""),
+                    "from": ev.get("from"),
+                    "to": ev.get("to"),
+                },
+            })
 
     @staticmethod
     def _daemon_socat(action: str) -> str:
@@ -535,6 +537,7 @@ class CustomizationRunner(RunnerBase):
     async def _poll_diffs(self):
         while not self._cancelled:
             try:
+                await self._drain_file_events()
                 await self._emit_pending_diffs()
             except Exception as e:
                 logger.debug("diff poll error: %s", e)
