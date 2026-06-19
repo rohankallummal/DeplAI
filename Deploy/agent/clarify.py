@@ -18,7 +18,7 @@ async def run(deploy_path: str) -> bool:
 
     options = ClaudeAgentOptions(
         model="opus",
-        allowed_tools=["Read", "Write", "Edit", "Bash"],
+        allowed_tools=["Read", "Write", "Edit", "Bash", "WebSearch", "WebFetch", "mcp__firecrawl"],
         permission_mode="bypassPermissions",
         cwd=deploy_path,
         max_turns=30,

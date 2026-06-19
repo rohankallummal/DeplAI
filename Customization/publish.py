@@ -107,9 +107,9 @@ def create_customize_pr(
     token: str,
     owner: str,
     repo: str,
-    default_branch: str = "main",
+    branch_name: str,
+    base_branch: str = "main",
 ) -> tuple[bool, str, str | None]:
-    branch_name = f"deplai/customize-{project_id}"
     clone_url = f"https://x-access-token:{token}@github.com/{owner}/{repo}.git"
 
     user_name, user_email = get_github_user_identity(token, owner)
@@ -148,29 +148,43 @@ def create_customize_pr(
 
     logger.info("Pushed branch %s to %s/%s", branch_name, owner, repo)
     headers = github_headers(token)
+    pulls_url = f"https://api.github.com/repos/{owner}/{repo}/pulls"
+    repo_url = f"https://github.com/{owner}/{repo}"
+
+    # Find-or-create: an open PR for this head already exists when continuing an
+    # existing customization, so reuse it instead of attempting a (doomed) create.
+    existing = requests.get(
+        pulls_url,
+        headers=headers,
+        params={"head": f"{owner}:{branch_name}", "state": "open"},
+        timeout=15,
+    )
+    if existing.ok and existing.json():
+        pr_url = existing.json()[0]["html_url"]
+        logger.info("Reusing existing PR: %s", pr_url)
+        return (True, "Pull request already exists", pr_url)
 
     resp = requests.post(
-        f"https://api.github.com/repos/{owner}/{repo}/pulls",
+        pulls_url,
         headers=headers,
         json={
             "title": "feat: DeplAI UI customization",
             "body": PR_BODY,
             "head": branch_name,
-            "base": default_branch,
+            "base": base_branch,
         },
         timeout=30,
     )
-
-    repo_url = f"https://github.com/{owner}/{repo}"
 
     if resp.status_code == 201:
         pr_url = resp.json()["html_url"]
         logger.info("Created PR: %s", pr_url)
         return (True, "Pull request created successfully", pr_url)
 
+    # Defensive fallback: a race could still surface 422 (PR created meanwhile).
     if resp.status_code == 422:
         existing = requests.get(
-            f"https://api.github.com/repos/{owner}/{repo}/pulls",
+            pulls_url,
             headers=headers,
             params={"head": f"{owner}:{branch_name}", "state": "open"},
             timeout=15,

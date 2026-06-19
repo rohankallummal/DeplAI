@@ -3,9 +3,13 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+from constants import is_project_stream_branch
 
 _IDENTIFIER_RE = re.compile(r"[A-Za-z0-9._-]+")
+# Git refs flow into container shell `git` commands; constrain to safe ref chars.
+_REF_RE = re.compile(r"[A-Za-z0-9._/-]+")
 
 
 class CustomizeValidationRequest(BaseModel):
@@ -18,6 +22,11 @@ class CustomizeValidationRequest(BaseModel):
     owner: Optional[str] = None
     repo: Optional[str] = None
     default_branch: Optional[str] = "main"
+    # Branch-aware selection (set by the validate route for popup-driven sessions;
+    # absent → legacy single-stream behavior).
+    base_branch: Optional[str] = None
+    customize_branch: Optional[str] = None
+    is_new_branch: bool = False
 
     @field_validator("project_id", "user_id")
     @classmethod
@@ -31,6 +40,36 @@ class CustomizeValidationRequest(BaseModel):
                 "must be a non-empty identifier of [A-Za-z0-9._-] with no '..'"
             )
         return v
+
+    @field_validator("base_branch", "customize_branch")
+    @classmethod
+    def _safe_ref(cls, v: Optional[str]) -> Optional[str]:
+        # base_branch and customize_branch are interpolated into container shell
+        # `git` commands (checkout / fetch / push), so reject anything outside a
+        # safe git-ref charset or containing a traversal sequence.
+        if v is None:
+            return v
+        # Reject leading '-' too: git itself forbids it in ref names, and without
+        # this guard a value like "-f" / "--orphan" would be parsed as an option by
+        # `git checkout {base_branch}` rather than as a branch (argument injection).
+        if not v or not _REF_RE.fullmatch(v) or ".." in v or v.startswith("-"):
+            raise ValueError(
+                "must be a safe git ref of [A-Za-z0-9._/-], not starting with '-', with no '..'"
+            )
+        return v
+
+    @model_validator(mode="after")
+    def _customize_branch_in_namespace(self) -> "CustomizeValidationRequest":
+        # Defense-in-depth mirroring the validate-route guard: a customize_branch,
+        # when present, must live in this project's deplai/customize- namespace so
+        # the publish step can never be coaxed into force-pushing an arbitrary branch.
+        if self.customize_branch is not None and not is_project_stream_branch(
+            self.customize_branch, self.project_id
+        ):
+            raise ValueError(
+                "customize_branch must be within the project's deplai/customize- namespace"
+            )
+        return self
 
 
 class CustomizeValidationResponse(BaseModel):

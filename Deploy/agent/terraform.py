@@ -87,7 +87,7 @@ async def run(deploy_path: str, state_key: str, phase: str = "plan") -> Terrafor
         model="opus",
         allowed_tools=[
             "Read", "Write", "Bash", "Agent",
-            "Grep", "Glob",
+            "Grep", "Glob", "Monitor",
             "mcp__firecrawl",
         ],
         permission_mode="bypassPermissions",

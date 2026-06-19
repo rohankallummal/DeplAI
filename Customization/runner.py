@@ -16,6 +16,7 @@ from utils import (
     decode_output,
 )
 from publish import save_local_changes, create_customize_pr
+from constants import legacy_stream_branch
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +62,24 @@ class CustomizationRunner(RunnerBase):
         if self.context.project_type == "github":
             return self._project_dir
         return f"{self._project_dir}/edited"
+
+    def _effective_branches(self) -> tuple[str, str, bool]:
+        """Resolve (customize_branch, base_branch, is_new) for this session. When the
+        branch-aware fields are absent (legacy / non-popup path), fall back to the
+        single-stream branch `deplai/customize-{project_id}` and the default base."""
+        customize = self.context.customize_branch or legacy_stream_branch(self.project_id)
+        base = self.context.base_branch or self.context.default_branch or "main"
+        return customize, base, bool(self.context.is_new_branch)
+
+    def _current_git_branch(self) -> str | None:
+        """The branch currently checked out in the project's volume dir, or None."""
+        ec, out = self._container.exec_run(
+            ["sh", "-c", f"git -C {self._project_dir} -c safe.directory='*' rev-parse --abbrev-ref HEAD 2>/dev/null"],
+            user="agent",
+        )
+        if ec != 0:
+            return None
+        return decode_output(out).strip() or None
 
     def cancel(self):
         super().cancel()
@@ -585,13 +604,15 @@ class CustomizationRunner(RunnerBase):
             if not self.context.github_token or not self.context.owner or not self.context.repo:
                 result = {"success": False, "message": "Missing GitHub credentials"}
             else:
+                customize_branch, base_branch, _ = self._effective_branches()
                 success, message, url = await asyncio.to_thread(
                     create_customize_pr,
                     self.project_id,
                     self.context.github_token,
                     self.context.owner,
                     self.context.repo,
-                    self.context.default_branch or "main",
+                    customize_branch,
+                    base_branch,
                 )
                 result = {"success": success, "message": message, "url": url}
         else:
@@ -637,8 +658,29 @@ class CustomizationRunner(RunnerBase):
     def _copy_codebase_to_volume(self) -> tuple[bool, str]:
         try:
             if self._project_dir_exists():
-                logger.info("Reusing existing codebase for project %s (resuming prior edits)", self.project_id)
-                return (True, "")
+                # Branch-keyed reuse only applies to an explicit popup selection: a
+                # different branch selection must re-clone so one stream never inherits
+                # another's tree. The legacy single-stream path (no customize_branch)
+                # and local projects resume the prior tree unconditionally — re-cloning
+                # there would discard a first session's unsaved edits, since that tree
+                # legitimately sits on the default branch until the first save.
+                if self.context.project_type == "github" and self.context.customize_branch is not None:
+                    customize_branch, _, _ = self._effective_branches()
+                    current = self._current_git_branch()
+                    if current == customize_branch:
+                        logger.info(
+                            "Reusing existing codebase for project %s (branch %s, resuming prior edits)",
+                            self.project_id, customize_branch,
+                        )
+                        return (True, "")
+                    logger.info(
+                        "Existing checkout on '%s' but session targets '%s'; re-cloning",
+                        current, customize_branch,
+                    )
+                    # fall through to a fresh clone (it rm -rf's the dir first)
+                else:
+                    logger.info("Reusing existing codebase for project %s (resuming prior edits)", self.project_id)
+                    return (True, "")
             if self.context.project_type == "github":
                 return self._clone_github_repo()
             return self._copy_local_codebase()
@@ -712,14 +754,28 @@ class CustomizationRunner(RunnerBase):
                 user="root",
             )
 
-            branch_name = f"deplai/customize-{self.project_id}"
+            customize_branch, base_branch, is_new = self._effective_branches()
+            explicit = self.context.customize_branch is not None
+            repo_dir = f"/repo/codebase/{self.project_id}"
 
-            clone_script = (
-                f"git clone {clone_url} /repo/codebase/{self.project_id} && "
-                f"cd /repo/codebase/{self.project_id} && "
-                f"git fetch origin {branch_name} 2>/dev/null && "
-                f"git checkout {branch_name} 2>/dev/null || true"
-            )
+            if not explicit:
+                # Legacy single-stream behavior: continue the legacy branch if it
+                # exists on the remote, otherwise start from the repo's default branch.
+                checkout = (
+                    f"git fetch origin {customize_branch} 2>/dev/null && "
+                    f"git checkout {customize_branch} 2>/dev/null || true"
+                )
+                strict, fail_msg = False, ""
+            elif is_new:
+                # Branch off the chosen base into a fresh stream branch.
+                checkout = f"git checkout {base_branch} && git checkout -b {customize_branch}"
+                strict, fail_msg = True, "Could not start a new customization branch"
+            else:
+                # Resume an existing customization branch (its open PR's head).
+                checkout = f"git fetch origin {customize_branch} && git checkout {customize_branch}"
+                strict, fail_msg = True, "Could not load the selected customization branch"
+
+            clone_script = f"git clone {clone_url} {repo_dir} && cd {repo_dir} && {checkout}"
 
             clone_ctr = get_docker_client().containers.run(
                 "alpine/git",
@@ -730,13 +786,19 @@ class CustomizationRunner(RunnerBase):
                 detach=True,
             )
             try:
-                clone_ctr.wait()
+                result = clone_ctr.wait()
+                logs = decode_output(clone_ctr.logs())
             finally:
                 try:
                     clone_ctr.remove(force=True)
                 except Exception:
                     pass
-            logger.info("GitHub repo cloned into volume for project %s", self.project_id)
+
+            if strict and result.get("StatusCode", -1) != 0:
+                logger.error("Clone/checkout failed for %s (%s): %s", self.project_id, customize_branch, logs)
+                return (False, fail_msg)
+
+            logger.info("GitHub repo ready for project %s on branch %s", self.project_id, customize_branch)
             return (True, "")
         except Exception as e:
             logger.error("Failed to clone GitHub repo: %s", e)

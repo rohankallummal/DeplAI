@@ -8,6 +8,7 @@ import ThemeToggle from '@/components/theme-toggle';
 import { usePageLoading } from '@/lib/page-loading-context';
 import ChatIcon from '@/components/chat-icon';
 import ChatInterface from './chat-interface';
+import BranchSelectModal, { type BranchSelection } from '@/components/branch-select-modal';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { usePopup } from '@/components/toast-notification';
@@ -69,6 +70,7 @@ function RepositoryBrowserContent() {
   const [isSuspended, setIsSuspended] = useState(false);
   const [installationId, setInstallationId] = useState<string | null>(null);
   const [chatOpen, setChatOpen] = useState(false);
+  const [branchModalOpen, setBranchModalOpen] = useState(false);
   const chatBlockingRef = useRef(false);
   const [username, setUsername] = useState('');
   const [branches, setBranches] = useState<string[]>([]);
@@ -92,14 +94,10 @@ function RepositoryBrowserContent() {
     return () => window.removeEventListener('popstate', handlePopstate);
   }, []);
 
-  async function handleOpenChat() {
+  async function handleOpenChat(selection?: BranchSelection) {
     if (savingProject) return;
 
     resetCustomize(projectId);
-
-    chatBlockingRef.current = true;
-    window.history.pushState(null, '', window.location.href);
-    setChatOpen(true);
 
     try {
       const body: Record<string, any> = {
@@ -112,17 +110,38 @@ function RepositoryBrowserContent() {
         body.repo = repo;
         body.default_branch = currentBranch || defaultBranch || 'main';
         if (installationId) body.installation_id = installationId;
+        // Branch-aware selection from the pre-chat popup (GitHub only).
+        if (selection) {
+          body.base_branch = selection.base_branch;
+          body.mode = selection.mode;
+          if (selection.mode === 'continue' && selection.pr) {
+            body.pr_number = selection.pr.number;
+          }
+        }
       }
 
-      await fetch('/api/customize/validate', {
+      const res = await fetch('/api/customize/validate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
 
+      // Only open the chat once the session is validated — otherwise the
+      // WebSocket would start with no backend context (e.g. a continued PR that
+      // was closed between selection and confirm) and show a broken session.
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        showPopup({ type: 'error', message: data.error || 'Could not start customization. Please try again.' });
+        return;
+      }
+
+      chatBlockingRef.current = true;
+      window.history.pushState(null, '', window.location.href);
+      setChatOpen(true);
       await startCustomize(projectId);
     } catch (err) {
       console.error('Failed to start customization:', err);
+      showPopup({ type: 'error', message: 'Could not start customization. Please try again.' });
     }
   }
 
@@ -405,7 +424,11 @@ function RepositoryBrowserContent() {
 
             <div className="flex items-center space-x-3">
               <button
-                onClick={() => chatOpen ? handleExitChat() : handleOpenChat()}
+                onClick={() => {
+                  if (chatOpen) { handleExitChat(); return; }
+                  if (isLocal) { handleOpenChat(); return; }
+                  setBranchModalOpen(true);
+                }}
                 disabled={savingProject}
                 className={`p-2 rounded-lg transition ${
                   chatOpen
@@ -681,6 +704,20 @@ function RepositoryBrowserContent() {
       </div>
 
       </>
+      )}
+
+      {branchModalOpen && !isLocal && (
+        <BranchSelectModal
+          owner={owner}
+          repo={repo}
+          projectId={projectId}
+          defaultBranch={defaultBranch || currentBranch || 'main'}
+          onClose={() => setBranchModalOpen(false)}
+          onConfirm={(selection) => {
+            setBranchModalOpen(false);
+            handleOpenChat(selection);
+          }}
+        />
       )}
 
       {exitPopupOpen && (

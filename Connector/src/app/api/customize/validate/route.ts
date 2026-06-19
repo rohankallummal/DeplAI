@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth, verifyProjectOwnership, verifyRepositoryOwnership } from '@/lib/auth';
 import { githubService } from '@/lib/github';
+import { newStreamBranch } from '@/lib/customize-branches';
 import { CUSTOMIZE_URL, customizeHeaders, logCustomizeError, isConnectionRefused, customizeUnavailableResponse } from '@/lib/customize';
 
 export async function POST(request: NextRequest) {
@@ -17,6 +18,9 @@ export async function POST(request: NextRequest) {
       owner,
       repo,
       default_branch,
+      mode,
+      base_branch,
+      pr_number,
     } = body;
 
     const backendPayload: Record<string, any> = {
@@ -51,6 +55,40 @@ export async function POST(request: NextRequest) {
           { error: 'Failed to authenticate with GitHub. The installation may be suspended or removed.' },
           { status: 403 }
         );
+      }
+
+      // Branch-aware selection (two-step popup). Absent `mode` → legacy single-stream
+      // behavior (the service falls back to deplai/customize-{project_id} + default base).
+      // The customize branch is resolved/validated entirely server-side so DeplAI can only
+      // ever force-push within its own project-scoped namespace.
+      if (mode === 'new' || mode === 'continue') {
+        const baseBranch = base_branch || default_branch || 'main';
+        backendPayload.base_branch = baseBranch;
+
+        if (mode === 'new') {
+          backendPayload.customize_branch = newStreamBranch(project_id);
+          backendPayload.is_new_branch = true;
+        } else {
+          const prNumber = Number(pr_number);
+          if (!Number.isInteger(prNumber)) {
+            return NextResponse.json(
+              { error: 'pr_number is required to continue an existing customization' },
+              { status: 400 }
+            );
+          }
+          const pulls = await githubService.getDeplaiPullsForBase(
+            ownership.installationId, owner, repo, baseBranch, project_id
+          );
+          const match = pulls.find(p => p.number === prNumber);
+          if (!match) {
+            return NextResponse.json(
+              { error: 'Selected customization PR was not found or is not eligible' },
+              { status: 400 }
+            );
+          }
+          backendPayload.customize_branch = match.head_ref;
+          backendPayload.is_new_branch = false;
+        }
       }
     } else {
       const ownershipCheck = await verifyProjectOwnership(user.id, project_id);

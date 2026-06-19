@@ -5,6 +5,24 @@ import { v4 as uuidv4 } from 'uuid';
 import simpleGit from 'simple-git';
 import fs from 'fs';
 import path from 'path';
+import { isDeplaiBranch, isProjectStreamBranch } from './customize-branches';
+
+export interface OpenPull {
+  number: number;
+  headRef: string;
+  baseRef: string;
+  authorType: string;
+  htmlUrl: string;
+  title: string;
+}
+
+export interface DeplaiStreamPull {
+  number: number;
+  head_ref: string;
+  base_ref: string;
+  html_url: string;
+  title: string;
+}
 
 interface GitHubConfig {
   appId: string;
@@ -173,6 +191,90 @@ export class GitHubService {
 
     await this.updateDefaultBranch(owner, repo, defaultBranch);
     return { defaultBranch, branches };
+  }
+
+  async listOpenPulls(installationId: string, owner: string, repo: string): Promise<OpenPull[]> {
+    const octokit = await this.getInstallationClient(installationId);
+    const pulls = await octokit.paginate(octokit.pulls.list, {
+      owner,
+      repo,
+      state: 'open',
+      per_page: 100,
+    });
+    return (pulls as any[]).map(pr => ({
+      number: pr.number,
+      headRef: pr.head?.ref || '',
+      baseRef: pr.base?.ref || '',
+      authorType: pr.user?.type || '',
+      htmlUrl: pr.html_url || '',
+      title: pr.title || '',
+    }));
+  }
+
+  // One round trip backing the branch-aware popup: the repo's customizable base
+  // branches plus this project's open DeplAI customization PRs across all bases (so
+  // Step 2 can filter by the chosen base client-side without a second PR fetch).
+  //
+  // Customizable branches = every repo branch minus (a) the head ref of any open PR
+  // and (b) any DeplAI automation branch (`deplai/customize-*`), regardless of PR
+  // state, so a merged/closed DeplAI branch never leaks back in. If the PR query
+  // fails we still hide DeplAI branches (a pure name rule) so Step 1 stays usable —
+  // we just can't hide human in-review heads or list streams until it recovers.
+  async getCustomizeOptions(
+    installationId: string,
+    owner: string,
+    repo: string,
+    projectId: string,
+  ): Promise<{ defaultBranch: string; branches: string[]; pulls: DeplaiStreamPull[] }> {
+    const { defaultBranch, branches } = await this.getBranchInfo(installationId, owner, repo);
+
+    let openPulls: OpenPull[] = [];
+    try {
+      openPulls = await this.listOpenPulls(installationId, owner, repo);
+    } catch (err) {
+      console.error('getCustomizeOptions: PR list failed, degrading to name-only filter:', err);
+    }
+
+    const openPrHeads = new Set(openPulls.map(pr => pr.headRef));
+    const customizable = branches.filter(b => !openPrHeads.has(b) && !isDeplaiBranch(b));
+    const pulls = openPulls
+      .filter(pr => this.isDeplaiProjectPull(pr, projectId))
+      .map(pr => this.toStreamPull(pr));
+
+    return { defaultBranch, branches: customizable, pulls };
+  }
+
+  // Open DeplAI customization PRs targeting `base` for this project — used by the
+  // validate route to re-resolve a continued PR server-side (closing the TOCTOU
+  // window between popup selection and commit).
+  async getDeplaiPullsForBase(
+    installationId: string,
+    owner: string,
+    repo: string,
+    base: string,
+    projectId: string,
+  ): Promise<DeplaiStreamPull[]> {
+    const pulls = await this.listOpenPulls(installationId, owner, repo);
+    return pulls
+      .filter(pr => pr.baseRef === base && this.isDeplaiProjectPull(pr, projectId))
+      .map(pr => this.toStreamPull(pr));
+  }
+
+  // A PR is this project's continuable customization iff its head is in the
+  // project's stream namespace AND it was authored by the app's bot account, so a
+  // human-made `deplai/customize-*` PR is never offered.
+  private isDeplaiProjectPull(pr: OpenPull, projectId: string): boolean {
+    return pr.authorType === 'Bot' && isProjectStreamBranch(pr.headRef, projectId);
+  }
+
+  private toStreamPull(pr: OpenPull): DeplaiStreamPull {
+    return {
+      number: pr.number,
+      head_ref: pr.headRef,
+      base_ref: pr.baseRef,
+      html_url: pr.htmlUrl,
+      title: pr.title,
+    };
   }
 
   private async getEffectiveBranch(installationId: string, owner: string, repo: string): Promise<string> {
