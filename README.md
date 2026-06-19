@@ -12,7 +12,7 @@ DeplAI aims to replicate and automate security validation processes that were tr
 
 ---
 
-# Platform Architecture
+# Platform
 
 The platform consists of four core services:
 
