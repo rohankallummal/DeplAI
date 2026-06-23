@@ -14,8 +14,6 @@ DeplAI aims to replicate and automate security validation processes that were tr
 
 # Tech Stack
 
-DeplAI leverages a modern, scalable technology stack designed for security automation and cloud deployment:
-
 | Frontend | Backend | Infrastructure & DevOps | Data & Integration |
 | --- | --- | --- | --- |
 | Next.js | Python | Docker | MySQL |
