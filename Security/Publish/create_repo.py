@@ -52,7 +52,6 @@ def create_repo(
         if resp2.status_code == 201:
             repo_data = resp2.json()
         else:
-            org_error = resp2.json().get("message", resp2.text)
             logger.error(
                 "POST /orgs/%s/repos failed — status=%d body=%s",
                 owner, resp2.status_code, resp2.text[:500],

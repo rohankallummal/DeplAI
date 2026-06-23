@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import LoadingSpinner from '@/components/loading-spinner';
 
 export interface DeplaiPr {
   number: number;
@@ -27,15 +28,6 @@ interface BranchSelectModalProps {
   // Selection mechanics are identical: `continue` → a customization PR's head
   // branch, `new` → the chosen branch as-is.
   mode?: 'customize' | 'preview';
-}
-
-function Spinner() {
-  return (
-    <svg className="animate-spin h-5 w-5 text-muted" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-    </svg>
-  );
 }
 
 function CloseButton({ onClick }: { onClick: () => void }) {
@@ -155,8 +147,8 @@ export default function BranchSelectModal({ owner, repo, projectId, defaultBranc
         setBranches(data.branches || []);
         setAllPulls(data.pulls || []);
         // No auto-selection — the user must explicitly choose a branch before proceeding.
-      } catch (err: any) {
-        if (!cancelled) setBranchesError(err.message || 'Failed to load branches');
+      } catch (err) {
+        if (!cancelled) setBranchesError(err instanceof Error ? err.message : 'Failed to load branches');
       } finally {
         if (!cancelled) setBranchesLoading(false);
       }
@@ -208,54 +200,62 @@ export default function BranchSelectModal({ owner, repo, projectId, defaultBranc
             </StepHeader>
 
             <div className="px-7 pt-5 pb-1">
-              <div className="relative">
-                <span className="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"><SearchIcon /></span>
-                <input
-                  type="text"
-                  value={branchSearch}
-                  onChange={(e) => setBranchSearch(e.target.value)}
-                  placeholder="Search branches"
-                  className="w-full pl-9 pr-3 py-2 text-sm rounded-lg border border-border bg-search text-foreground placeholder:text-muted focus:outline-none focus:ring-1 focus:ring-blue-500"
-                  autoFocus
-                />
-              </div>
-
-              <div className="mt-3 rounded-xl border border-border overflow-hidden">
-                <div className="max-h-[216px] overflow-y-auto scrollbar-hidden divide-y divide-border">
-                  {branchesLoading ? (
-                    <div className="flex justify-center py-10"><Spinner /></div>
-                  ) : branchesError ? (
-                    <p className="px-4 py-8 text-sm text-red-500 text-center">{branchesError}</p>
-                  ) : visibleBranches.length === 0 ? (
-                    <p className="px-4 py-8 text-sm text-muted text-center">No customizable branches found</p>
-                  ) : (
-                    visibleBranches.map(b => {
-                      const isSelected = b === selectedBranch;
-                      return (
-                        <button
-                          key={b}
-                          onClick={() => setSelectedBranch(b)}
-                          className={`w-full px-3.5 py-2.5 text-left text-sm transition flex items-center gap-3 ${
-                            isSelected ? 'bg-blue-50 dark:bg-blue-900/20' : 'hover:bg-surface-hover'
-                          }`}
-                        >
-                          <BranchIcon className={`shrink-0 ${isSelected ? 'text-blue-600 dark:text-blue-400' : 'text-muted'}`} />
-                          <span className={`truncate flex-1 ${isSelected ? 'text-blue-600 dark:text-blue-400 font-medium' : 'text-foreground'}`}>{b}</span>
-                          {b === defaultBranch && (
-                            <span className="text-[10px] font-medium uppercase tracking-wide text-muted border border-border rounded px-1.5 py-0.5 shrink-0">default</span>
-                          )}
-                        </button>
-                      );
-                    })
-                  )}
+              {branchesLoading ? (
+                <div className="flex justify-center py-12">
+                  <LoadingSpinner size="lg" />
                 </div>
-              </div>
+              ) : (
+                <>
+                  <div className="relative">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"><SearchIcon /></span>
+                    <input
+                      type="text"
+                      value={branchSearch}
+                      onChange={(e) => setBranchSearch(e.target.value)}
+                      placeholder="Search branches"
+                      className="w-full pl-9 pr-3 py-2 text-sm rounded-lg border border-border bg-search text-foreground placeholder:text-muted focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      autoFocus
+                    />
+                  </div>
+
+                  <div className="mt-3 rounded-xl border border-border overflow-hidden">
+                    <div className="max-h-[216px] overflow-y-auto scrollbar-hidden divide-y divide-border">
+                      {branchesError ? (
+                        <p className="px-4 py-8 text-sm text-red-500 text-center">{branchesError}</p>
+                      ) : visibleBranches.length === 0 ? (
+                        <p className="px-4 py-8 text-sm text-muted text-center">No customizable branches found</p>
+                      ) : (
+                        visibleBranches.map(b => {
+                          const isSelected = b === selectedBranch;
+                          return (
+                            <button
+                              key={b}
+                              onClick={() => setSelectedBranch(b)}
+                              className={`w-full px-3.5 py-2.5 text-left text-sm transition flex items-center gap-3 ${
+                                isSelected ? 'bg-blue-50 dark:bg-blue-900/20' : 'hover:bg-surface-hover'
+                              }`}
+                            >
+                              <BranchIcon className={`shrink-0 ${isSelected ? 'text-blue-600 dark:text-blue-400' : 'text-muted'}`} />
+                              <span className={`truncate flex-1 ${isSelected ? 'text-blue-600 dark:text-blue-400 font-medium' : 'text-foreground'}`}>{b}</span>
+                              {b === defaultBranch && (
+                                <span className="text-[10px] font-medium uppercase tracking-wide text-muted border border-border rounded px-1.5 py-0.5 shrink-0">default</span>
+                              )}
+                            </button>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
+                </>
+              )}
             </div>
 
-            <div className="px-7 py-4 mt-3 border-t border-border flex items-center justify-between">
-              <button onClick={onClose} className={TERTIARY_BTN}>Cancel</button>
-              <button onClick={goToStep2} disabled={!selectedBranch} className={PRIMARY_BTN}>Next</button>
-            </div>
+            {!branchesLoading && (
+              <div className="px-7 py-4 mt-3 border-t border-border flex items-center justify-between">
+                <button onClick={onClose} className={TERTIARY_BTN}>Cancel</button>
+                <button onClick={goToStep2} disabled={!selectedBranch} className={PRIMARY_BTN}>Next</button>
+              </div>
+            )}
           </>
         ) : (
           <>
@@ -302,10 +302,10 @@ export default function BranchSelectModal({ owner, repo, projectId, defaultBranc
 
             <div className="px-7 py-4 mt-3 border-t border-border flex items-center justify-between gap-2">
               <button onClick={back} className={TERTIARY_BTN}>Back</button>
-              <div className="flex items-center gap-2">
+              <div className={`grid gap-2 ${prSelected ? 'grid-cols-2' : 'grid-cols-1'}`}>
                 {prSelected && (
                   <button onClick={continueExisting} className={PRIMARY_BTN}>
-                    {isPreview ? 'Preview customization PR' : 'Continue Existing'}
+                    {isPreview ? 'Preview PR' : 'Continue PR'}
                   </button>
                 )}
                 <button
@@ -313,8 +313,8 @@ export default function BranchSelectModal({ owner, repo, projectId, defaultBranc
                   className={prSelected ? SECONDARY_BTN : PRIMARY_BTN}
                 >
                   {isPreview
-                    ? 'Preview this branch'
-                    : prsForBase.length > 0 ? 'Start New Customization' : 'Start Customization'}
+                    ? 'Preview Branch'
+                    : prsForBase.length > 0 ? 'New Chat' : 'Start Customization'}
                 </button>
               </div>
             </div>

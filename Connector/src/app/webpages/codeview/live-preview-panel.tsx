@@ -72,19 +72,12 @@ export default function LivePreviewPanel({
     );
   }
 
-  // initializing: preparing / installing / starting / idle
-  const recent = state.messages.slice(-4);
+  // initializing: preparing / installing / starting / idle — a single current
+  // status line (the phase label already reflects each step).
   return (
     <div className={`w-full ${PANEL_HEIGHT} flex flex-col items-center justify-center px-6`}>
       <LoadingSpinner size="md" />
       <p className="text-foreground font-medium mt-4">{PHASE_LABEL[state.phase]}</p>
-      {recent.length > 0 && (
-        <div className="mt-3 space-y-1 text-center">
-          {recent.map((m, i) => (
-            <p key={i} className="text-sm text-muted">{m}</p>
-          ))}
-        </div>
-      )}
     </div>
   );
 }

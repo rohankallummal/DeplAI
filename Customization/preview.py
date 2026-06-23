@@ -48,9 +48,6 @@ class PreviewRunner(RunnerBase):
         self.status = status
         await self._try_send({"type": "status", "status": status})
 
-    async def _send_progress(self, message: str):
-        await self._try_send({"type": "progress", "data": {"message": message}})
-
     # ---- lifecycle ----------------------------------------------------------
 
     async def _run_pipeline(self) -> bool:
@@ -74,7 +71,6 @@ class PreviewRunner(RunnerBase):
 
         await asyncio.to_thread(self._create_volume)
 
-        await self._send_progress("Preparing your project")
         ok, err = await asyncio.to_thread(self._populate_code)
         if not ok:
             logger.error("Preview code population failed: %s", err)
@@ -271,7 +267,7 @@ class PreviewRunner(RunnerBase):
         if not self._container:
             return None
         try:
-            ec, out = self._container.exec_run(["cat", STATUS_PATH], user="agent")
+            ec, out = self._container.exec_run(["cat", STATUS_PATH], user="root")
         except Exception:
             return None
         if ec != 0:
@@ -290,9 +286,6 @@ class PreviewRunner(RunnerBase):
                 if s and s != last and s in ("installing", "starting"):
                     last = s
                     await self._send_preview_status(s)
-                    msg = st.get("message")
-                    if msg:
-                        await self._send_progress(msg)
             await asyncio.sleep(STATUS_POLL_SECONDS)
 
     async def _run_preview_agent(self):
@@ -303,10 +296,15 @@ class PreviewRunner(RunnerBase):
             "--project-id", self.project_id,
             "--codebase-path", CODE_DIR,
         ]
+        # Run the previewer as root: the agent installs whatever runtime the
+        # project needs on demand (apt-get etc.), which requires root. HOME stays
+        # /home/agent so the Claude CLI finds its baked ~/.claude config. The
+        # preview container has no docker socket and is disposable, so root here
+        # is sandboxed.
         environment = {
             "HOME": "/home/agent",
             "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-            "USER": "agent",
+            "USER": "root",
             "ANTHROPIC_API_KEY": os.environ.get("ANTHROPIC_API_KEY", ""),
         }
 
@@ -320,7 +318,7 @@ class PreviewRunner(RunnerBase):
                 logger.info("[PREVIEW] %s", content)
 
         await stream_container_exec(
-            self._container, cmd, workdir="/app", user="agent",
+            self._container, cmd, workdir="/app", user="root",
             environment=environment, is_cancelled=lambda: self._cancelled,
             on_message=on_message,
         )

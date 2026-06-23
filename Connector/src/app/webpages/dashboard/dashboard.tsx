@@ -189,7 +189,7 @@ export default function Projects({
       }
 
       router.push(`/webpages/deploy?project_id=${deploySelectedProject.id}`);
-    } catch (err) {
+    } catch {
       showPopup({
         type: 'error',
         message: 'Deployment service is currently unavailable. Please try again later.',

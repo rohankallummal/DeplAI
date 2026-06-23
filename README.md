@@ -12,6 +12,20 @@ DeplAI aims to replicate and automate security validation processes that were tr
 
 ---
 
+# Tech Stack
+
+DeplAI leverages a modern, scalable technology stack designed for security automation and cloud deployment:
+
+| Frontend | Backend | Infrastructure & DevOps | Data & Integration |
+| --- | --- | --- | --- |
+| Next.js | Python | Docker | MySQL |
+| React | FastAPI | AWS | GitHub |
+| TypeScript | Claude Code/Agent SDK | Terraform | |
+| Tailwind CSS | | Nginx | |
+| | | WebSockets | |
+
+---
+
 # Platform
 
 The platform consists of four core services:
@@ -61,6 +75,7 @@ The Customization Service enables AI-assisted codebase modifications.
 * Uses a **Styler Agent** to modify code
 * Uses a **Builder Agent** to verify successful builds after changes
 * Supports iterative codebase personalization
+* Live Frontend Preview
 
 
 
@@ -309,9 +324,11 @@ FIRECRAWL_API_KEY=
 
 ---
 
-# Running the Connector (First-Time)
+# Running the Connector
 
-## Update Dashboard
+## Section 1: First-Time Setup
+
+### Update Dashboard
 
 Open the following file:
 
@@ -319,20 +336,22 @@ Open the following file:
 Connector/src/app/webpages/dashboard/dashboard.tsx
 ```
 
-Update the values on:
+Update:
 
 * Line 246
 * Line 278
 
-## Terminal 1
+With your Github App URL
 
-Start ngrok:
+### Terminal 1: Start Ngrok (Once Only)
+
+Start ngrok in a dedicated terminal. This only needs to run once:
 
 ```bash
 ngrok http 3000
 ```
 
-## Terminal 2
+### Terminal 2: Start the Connector
 
 Navigate to the Connector directory:
 
@@ -352,7 +371,7 @@ Start the application:
 npm run dev
 ```
 
-## Authenticate with GitHub
+### Authenticate with GitHub
 
 1. Open `http://localhost:3000` in your browser.
 2. Sign in using the configured GitHub App.
@@ -360,6 +379,17 @@ npm run dev
 4. Confirm that webhook events are being received through the ngrok forwarding URL.
 
 Once authentication is successful, the Connector is ready to communicate with the Security, Customization, and Deployment services.
+
+---
+
+## Section 2: Subsequent Runs
+
+```bash
+cd Connector
+npm run dev
+```
+
+Open `http://localhost:3000` in your browser to access the application.
 
 ---
 

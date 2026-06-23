@@ -289,7 +289,7 @@ export default function ChatInterface({
                 const firstPendingDiffId = messages.find(
                   m => m.type === 'diff' && m.diff?.status === 'pending'
                 )?.id;
-                return messages.map((msg, msgIndex) => {
+                return messages.map((msg) => {
                 if (msg.role === 'user') {
                   return (
                     <div key={msg.id} className="flex justify-end">

@@ -110,7 +110,7 @@ function DeployPageContent() {
       }
 
       setLoading(false);
-    } catch (err) {
+    } catch {
       router.push('/');
     }
   }

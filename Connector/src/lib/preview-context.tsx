@@ -11,7 +11,6 @@ export interface PreviewState {
   phase: PreviewPhase;
   url: string | null;
   error: string | null;
-  messages: string[];
 }
 
 interface PreviewContextValue {
@@ -34,7 +33,6 @@ const DEFAULT_STATE: PreviewState = {
   phase: 'idle',
   url: null,
   error: null,
-  messages: [],
 };
 
 function getOrDefault(states: Record<string, PreviewState>, pid: string): PreviewState {
@@ -95,11 +93,6 @@ export function PreviewProvider({ children }: { children: React.ReactNode }) {
         case 'status': {
           const phase = VALID_PHASES.includes(data.status) ? (data.status as PreviewPhase) : 'error';
           updateProject(projectId, () => ({ phase }));
-          break;
-        }
-        case 'progress': {
-          const m: string | undefined = data.data?.message;
-          if (m) updateProject(projectId, existing => ({ messages: [...existing.messages, m] }));
           break;
         }
         case 'ready': {
