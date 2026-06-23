@@ -1,9 +1,12 @@
 import logging
-import os
 
 import requests
 
-from utils import get_docker_client, decode_output, CUSTOMIZE_CODE_VOLUME
+from utils import (
+    CUSTOMIZE_CODE_VOLUME,
+    local_project_host_path,
+    run_and_cleanup,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -38,30 +41,8 @@ def get_github_user_identity(token: str, owner: str) -> tuple[str, str]:
     return (owner, f"{owner}@users.noreply.github.com")
 
 
-def _run_and_cleanup(**run_kwargs) -> tuple[dict, str]:
-    container = get_docker_client().containers.run(detach=True, **run_kwargs)
-    try:
-        result = container.wait()
-        logs = decode_output(container.logs())
-    finally:
-        try:
-            container.remove(force=True)
-        except Exception:
-            pass
-    return result, logs
-
-
 def save_local_changes(project_id: str, user_id: str) -> tuple[bool, str]:
-    host_base = os.environ.get("HOST_PROJECTS_DIR")
-    if host_base:
-        host_path = os.path.join(host_base, user_id, project_id)
-    else:
-        host_path = os.path.abspath(
-            os.path.join(
-                os.path.dirname(__file__), "..", "Connector", "tmp",
-                "local-projects", user_id, project_id,
-            )
-        )
+    host_path, _ = local_project_host_path(user_id, project_id)
 
     # Overlay the modified/created files (additive), then apply the recorded
     # deletions. cp -a can only add/overwrite, so deletions must be replayed
@@ -85,7 +66,7 @@ def save_local_changes(project_id: str, user_id: str) -> tuple[bool, str]:
     )
 
     try:
-        _, logs = _run_and_cleanup(
+        _, logs = run_and_cleanup(
             image="alpine",
             command=["sh", "-c", save_script],
             volumes={
@@ -128,7 +109,7 @@ def create_customize_pr(
     ])
 
     try:
-        result, logs = _run_and_cleanup(
+        result, logs = run_and_cleanup(
             image="alpine/git",
             entrypoint="sh",
             command=["-c", script],

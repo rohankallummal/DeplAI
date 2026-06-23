@@ -77,8 +77,53 @@ class CustomizeValidationResponse(BaseModel):
     message: str
 
 
+class PreviewValidationRequest(BaseModel):
+    project_id: str
+    project_name: str
+    project_type: str
+    user_id: str
+    github_token: Optional[str] = None
+    repository_url: Optional[str] = None
+    owner: Optional[str] = None
+    repo: Optional[str] = None
+    # The single branch to clone into the LivePreview volume (github only). The
+    # Connector resolves this read-only: a customization PR's head branch (to
+    # preview the customized result) or any plain branch (to preview as-is).
+    branch: Optional[str] = None
+
+    @field_validator("project_id", "user_id")
+    @classmethod
+    def _safe_identifier(cls, v: str) -> str:
+        # Same constraint as CustomizeValidationRequest: these flow into
+        # container shell commands and host filesystem paths.
+        if not v or not _IDENTIFIER_RE.fullmatch(v) or ".." in v:
+            raise ValueError(
+                "must be a non-empty identifier of [A-Za-z0-9._-] with no '..'"
+            )
+        return v
+
+    @field_validator("branch")
+    @classmethod
+    def _safe_branch(cls, v: Optional[str]) -> Optional[str]:
+        # branch is interpolated into a container `git checkout`, so reject
+        # anything outside a safe git-ref charset, a traversal, or a leading '-'
+        # (which git would parse as an option).
+        if v is None:
+            return v
+        if not v or not _REF_RE.fullmatch(v) or ".." in v or v.startswith("-"):
+            raise ValueError(
+                "must be a safe git ref of [A-Za-z0-9._/-], not starting with '-', with no '..'"
+            )
+        return v
+
+
 class WebSocketCommand(BaseModel):
     action: Literal["start", "chat", "diff_response", "grant_all"]
+    data: Optional[dict] = None
+
+
+class PreviewWebSocketCommand(BaseModel):
+    action: Literal["start", "stop"]
     data: Optional[dict] = None
 
 
@@ -90,6 +135,14 @@ class StreamStatus(str, Enum):
     build_fixing = "build_fixing"
     completed = "completed"
     saving = "saving"
+    error = "error"
+
+
+class PreviewStatus(str, Enum):
+    preparing = "preparing"
+    installing = "installing"
+    starting = "starting"
+    ready = "ready"
     error = "error"
 
 

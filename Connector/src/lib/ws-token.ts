@@ -1,4 +1,4 @@
-export async function fetchWsToken(service: 'scan' | 'deploy' | 'customize'): Promise<string> {
+export async function fetchWsToken(service: 'scan' | 'deploy' | 'customize' | 'preview'): Promise<string> {
   try {
     const res = await fetch(`/api/${service}/ws-token`);
     if (!res.ok) return '';

@@ -2,18 +2,18 @@ import asyncio
 import json
 import logging
 import os
-import queue as thread_queue
 import shlex
 
 from fastapi import WebSocket
 
 from models import CustomizeValidationRequest, StreamStatus
-from runner_base import RunnerBase, CancelledError
+from runner_base import RunnerBase, CancelledError, stream_container_exec
 from utils import (
     get_docker_client,
     get_or_create_customize_container,
     CUSTOMIZE_CODE_VOLUME,
     decode_output,
+    local_project_host_path,
 )
 from publish import save_local_changes, create_customize_pr
 from constants import legacy_stream_branch
@@ -526,8 +526,6 @@ class CustomizationRunner(RunnerBase):
         if extra_args:
             cmd.extend(extra_args)
 
-        msg_q: thread_queue.Queue = thread_queue.Queue()
-
         environment = {
             "HOME": "/home/agent",
             "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
@@ -535,49 +533,10 @@ class CustomizationRunner(RunnerBase):
             "ANTHROPIC_API_KEY": os.environ.get("ANTHROPIC_API_KEY", ""),
         }
 
-        def _enqueue_line(text: str):
-            # Each output line is a JSON pipeline message; blanks are ignored and
-            # anything unparseable is surfaced as an error line.
-            text = text.strip()
-            if not text:
-                return
-            try:
-                msg_q.put(json.loads(text))
-            except json.JSONDecodeError:
-                msg_q.put({"type": "error", "content": text})
+        result: dict | None = None
 
-        def _read_exec_output():
-            buffer = ""
-            try:
-                # shlex.quote each arg: the user request / project name may contain
-                # single quotes (e.g. "it's") or other shell metacharacters. Naive
-                # '%s' wrapping breaks the command (unterminated quote) and is a
-                # shell-injection vector. shlex.quote is POSIX-sh safe.
-                wrapped_cmd = ["sh", "-c", " ".join(shlex.quote(c) for c in cmd) + " 2>&1"]
-                _, output = self._container.exec_run(
-                    wrapped_cmd, stream=True, workdir="/app", user="agent",
-                    environment=environment,
-                )
-                for chunk in output:
-                    buffer += chunk.decode(errors="replace")
-                    while "\n" in buffer:
-                        line, buffer = buffer.split("\n", 1)
-                        _enqueue_line(line)
-                _enqueue_line(buffer)
-            except Exception as e:
-                logger.debug("Exec stream ended: %s", e)
-            finally:
-                msg_q.put(None)
-
-        asyncio.get_running_loop().run_in_executor(None, _read_exec_output)
-
-        result = None
-        while True:
-            msg = await asyncio.to_thread(msg_q.get)
-            if msg is None:
-                break
-            if self._cancelled:
-                break
+        def on_message(msg: dict):
+            nonlocal result
             if msg.get("type") == "result":
                 result = msg.get("data")
             else:
@@ -588,6 +547,11 @@ class CustomizationRunner(RunnerBase):
                 else:
                     logger.info(f"[{msg_type.upper()}] {msg_content}")
 
+        await stream_container_exec(
+            self._container, cmd, workdir="/app", user="agent",
+            environment=environment, is_cancelled=lambda: self._cancelled,
+            on_message=on_message,
+        )
         return result
 
     async def save_changes(self) -> dict:
@@ -689,15 +653,7 @@ class CustomizationRunner(RunnerBase):
 
     def _copy_local_codebase(self) -> tuple[bool, str]:
         uid, pid = self.context.user_id, self.project_id
-        host_base = os.environ.get("HOST_PROJECTS_DIR")
-        if host_base:
-            check_path = os.path.join("/local-projects", uid, pid)
-            host_path = os.path.join(host_base, uid, pid)
-        else:
-            host_path = os.path.abspath(
-                os.path.join(os.path.dirname(__file__), "..", "Connector", "tmp", "local-projects", uid, pid)
-            )
-            check_path = host_path
+        host_path, check_path = local_project_host_path(uid, pid)
 
         if not os.path.isdir(check_path):
             return (False, f"Codebase directory not found at {check_path}")

@@ -23,6 +23,10 @@ interface BranchSelectModalProps {
   defaultBranch: string;
   onClose: () => void;
   onConfirm: (selection: BranchSelection) => void;
+  // 'preview' relabels the customize-oriented copy for the Live Preview flow.
+  // Selection mechanics are identical: `continue` → a customization PR's head
+  // branch, `new` → the chosen branch as-is.
+  mode?: 'customize' | 'preview';
 }
 
 function Spinner() {
@@ -120,7 +124,8 @@ function PrRow({ pr, selected, onSelect }: { pr: DeplaiPr; selected: boolean; on
   );
 }
 
-export default function BranchSelectModal({ owner, repo, projectId, defaultBranch, onClose, onConfirm }: BranchSelectModalProps) {
+export default function BranchSelectModal({ owner, repo, projectId, defaultBranch, onClose, onConfirm, mode = 'customize' }: BranchSelectModalProps) {
+  const isPreview = mode === 'preview';
   const [step, setStep] = useState<1 | 2>(1);
 
   const [branches, setBranches] = useState<string[]>([]);
@@ -196,9 +201,9 @@ export default function BranchSelectModal({ owner, repo, projectId, defaultBranc
 
         {step === 1 ? (
           <>
-            <StepHeader title="Select a base branch">
+            <StepHeader title={isPreview ? 'Select a branch to preview' : 'Select a base branch'}>
               <p className="text-muted text-sm mt-1.5 leading-relaxed">
-                Choose the branch you want to customize.
+                {isPreview ? 'Choose the branch you want to preview.' : 'Choose the branch you want to customize.'}
               </p>
             </StepHeader>
 
@@ -254,7 +259,7 @@ export default function BranchSelectModal({ owner, repo, projectId, defaultBranc
           </>
         ) : (
           <>
-            <StepHeader title="Continue or start new">
+            <StepHeader title={isPreview ? 'Choose what to preview' : 'Continue or start new'}>
               <div className="mt-2 inline-flex items-center gap-1.5 max-w-full rounded-lg bg-card border border-border px-2.5 py-1">
                 <BranchIcon className="w-3.5 h-3.5 text-muted shrink-0" />
                 <span className="text-xs text-muted shrink-0">Base</span>
@@ -267,12 +272,18 @@ export default function BranchSelectModal({ owner, repo, projectId, defaultBranc
                 {prsForBase.length === 0 ? (
                   <div className="py-4 text-center">
                     <p className="text-sm font-medium text-foreground">No existing customizations</p>
-                    <p className="text-sm text-muted mt-1">DeplAI hasn&rsquo;t opened a customization on this branch yet.</p>
+                    <p className="text-sm text-muted mt-1">
+                      {isPreview
+                        ? 'You’ll preview this branch as-is.'
+                        : 'DeplAI hasn’t opened a customization on this branch yet.'}
+                    </p>
                   </div>
                 ) : (
                   <div>
                     <p className="text-xs font-medium uppercase tracking-wide text-muted mb-2.5">
-                      {prsForBase.length === 1 ? 'Existing customization' : 'Continue an existing customization'}
+                      {prsForBase.length === 1
+                        ? 'Existing customization'
+                        : isPreview ? 'Customizations on this branch' : 'Continue an existing customization'}
                     </p>
                     <div className="space-y-2">
                       {prsForBase.map(pr => (
@@ -294,14 +305,16 @@ export default function BranchSelectModal({ owner, repo, projectId, defaultBranc
               <div className="flex items-center gap-2">
                 {prSelected && (
                   <button onClick={continueExisting} className={PRIMARY_BTN}>
-                    Continue Existing
+                    {isPreview ? 'Preview customization PR' : 'Continue Existing'}
                   </button>
                 )}
                 <button
                   onClick={startNew}
                   className={prSelected ? SECONDARY_BTN : PRIMARY_BTN}
                 >
-                  {prsForBase.length > 0 ? 'Start New Customization' : 'Start Customization'}
+                  {isPreview
+                    ? 'Preview this branch'
+                    : prsForBase.length > 0 ? 'Start New Customization' : 'Start Customization'}
                 </button>
               </div>
             </div>

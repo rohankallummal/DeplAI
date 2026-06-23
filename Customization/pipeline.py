@@ -40,15 +40,29 @@ async def run_build(codebase_path: str):
     _emit_result(result.success, "build")
 
 
+async def run_preview(codebase_path: str):
+    from agent.previewer import run
+
+    _on_message("phase", "Starting live preview")
+    result = await run(codebase_path)
+
+    if result.success:
+        _on_message("success", "Preview agent finished")
+    else:
+        _on_message("error", f"Preview failed: {result.error}")
+    _emit_result(result.success, "preview")
+
+
 PHASE_RUNNERS = {
     "execute": lambda args: run_execute(args.codebase_path, args.user_request),
     "build": lambda args: run_build(args.codebase_path),
+    "preview": lambda args: run_preview(args.codebase_path),
 }
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run the customization pipeline")
-    parser.add_argument("--phase", required=True, choices=["execute", "build"])
+    parser.add_argument("--phase", required=True, choices=["execute", "build", "preview"])
     parser.add_argument("--project-name", required=True)
     parser.add_argument("--project-id", required=True)
     parser.add_argument("--codebase-path", required=True)

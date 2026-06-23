@@ -7,12 +7,15 @@ import LoadingSpinner, { LoadingScreen } from '@/components/loading-spinner';
 import ThemeToggle from '@/components/theme-toggle';
 import { usePageLoading } from '@/lib/page-loading-context';
 import ChatIcon from '@/components/chat-icon';
+import LivePreviewIcon from '@/components/live-preview-icon';
 import ChatInterface from './chat-interface';
+import LivePreviewPanel from './live-preview-panel';
 import BranchSelectModal, { type BranchSelection } from '@/components/branch-select-modal';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { usePopup } from '@/components/toast-notification';
 import { useCustomize } from '@/lib/customize-context';
+import { usePreview } from '@/lib/preview-context';
 
 interface FileItem {
   name: string;
@@ -58,6 +61,7 @@ function RepositoryBrowserContent() {
 
   const { showPopup } = usePopup();
   const { startCustomize, getCustomizeState, resetCustomize, closeCustomize } = useCustomize();
+  const { startPreview, stopPreview } = usePreview();
   const [authLoading, setAuthLoading] = useState(true);
   const [pageReady, setPageReady] = useState(false);
   const [projectName, setProjectName] = useState('');
@@ -72,6 +76,8 @@ function RepositoryBrowserContent() {
   const [chatOpen, setChatOpen] = useState(false);
   const [branchModalOpen, setBranchModalOpen] = useState(false);
   const chatBlockingRef = useRef(false);
+  const previewBlockingRef = useRef(false);
+  const previewStartingRef = useRef(false);
   const [username, setUsername] = useState('');
   const [branches, setBranches] = useState<string[]>([]);
   const [currentBranch, setCurrentBranch] = useState<string>(branchParam);
@@ -80,12 +86,15 @@ function RepositoryBrowserContent() {
   const [branchSearch, setBranchSearch] = useState('');
   const [exitPopupOpen, setExitPopupOpen] = useState(false);
   const [savingProject, setSavingProject] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewBranchModalOpen, setPreviewBranchModalOpen] = useState(false);
+  const [exitPreviewPopupOpen, setExitPreviewPopupOpen] = useState(false);
 
   usePageLoading(authLoading || !pageReady);
 
   useEffect(() => {
     const handlePopstate = () => {
-      if (chatBlockingRef.current) {
+      if (chatBlockingRef.current || previewBlockingRef.current) {
         window.history.pushState(null, '', window.location.href);
       }
     };
@@ -93,6 +102,15 @@ function RepositoryBrowserContent() {
     window.addEventListener('popstate', handlePopstate);
     return () => window.removeEventListener('popstate', handlePopstate);
   }, []);
+
+  // Safety net: if the page unmounts while a preview is live (an in-app
+  // navigation that isn't the blocked Back button), tear it down so the backend
+  // container / volume / gateway don't leak.
+  const previewOpenRef = useRef(false);
+  previewOpenRef.current = previewOpen;
+  useEffect(() => () => {
+    if (previewOpenRef.current) stopPreview(projectId);
+  }, [projectId, stopPreview]);
 
   async function handleOpenChat(selection?: BranchSelection) {
     if (savingProject) return;
@@ -194,6 +212,85 @@ function RepositoryBrowserContent() {
 
   function handleExitDiscard() {
     doExitChat(true);
+  }
+
+  function handlePreviewButtonClick() {
+    if (savingProject) return;
+    if (isLocal) {
+      handleStartPreview();
+      return;
+    }
+    setPreviewBranchModalOpen(true);
+  }
+
+  async function handleStartPreview(selection?: BranchSelection) {
+    // Ignore re-entry (double-click / double-confirm) so two validate/start
+    // cycles can't race over the single shared preview environment.
+    if (previewStartingRef.current || previewOpen) return;
+    previewStartingRef.current = true;
+    try {
+      const body: Record<string, any> = {
+        project_id: projectId,
+        project_name: projectName || repo || 'Project',
+        project_type: projectType,
+      };
+      if (!isLocal) {
+        body.owner = owner;
+        body.repo = repo;
+        if (installationId) body.installation_id = installationId;
+        // Reuse the customize branch selection: continue → preview the PR's
+        // customized branch; new/plain → preview the chosen branch as-is.
+        if (selection) {
+          body.base_branch = selection.base_branch;
+          body.mode = selection.mode;
+          if (selection.mode === 'continue' && selection.pr) {
+            body.pr_number = selection.pr.number;
+          }
+        }
+      }
+
+      const res = await fetch('/api/preview/validate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        showPopup({ type: 'error', message: data.error || 'Could not start the preview. Please try again.' });
+        return;
+      }
+
+      setPreviewOpen(true);
+      // Block the browser Back button while the preview is live (mirrors chat),
+      // so leaving without Exit Preview can't orphan the backend environment.
+      previewBlockingRef.current = true;
+      window.history.pushState(null, '', window.location.href);
+      await startPreview(projectId);
+    } catch (err) {
+      console.error('Failed to start preview:', err);
+      showPopup({ type: 'error', message: 'Could not start the preview. Please try again.' });
+    } finally {
+      previewStartingRef.current = false;
+    }
+  }
+
+  function handleRetryPreview() {
+    // The backend still holds the validated context after an error, so re-running
+    // startPreview alone restarts the session without re-validating.
+    startPreview(projectId);
+  }
+
+  function handleExitPreview() {
+    setExitPreviewPopupOpen(true);
+  }
+
+  async function doExitPreview() {
+    setExitPreviewPopupOpen(false);
+    setPreviewOpen(false);
+    previewBlockingRef.current = false;
+    window.history.back();
+    await stopPreview(projectId);
   }
 
   useEffect(() => {
@@ -415,14 +512,45 @@ function RepositoryBrowserContent() {
         <div className="container mx-auto px-6 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-3">
-              <Link href="/webpages" className="flex items-center space-x-2">
-                <span className="text-xl font-bold text-foreground">
-                  {chatOpen ? 'DeplAI' : 'Code View'}
-                </span>
-              </Link>
+              {previewOpen ? (
+                <span className="text-xl font-bold text-foreground">Live Preview</span>
+              ) : (
+                <Link href="/webpages" className="flex items-center space-x-2">
+                  <span className="text-xl font-bold text-foreground">
+                    {chatOpen ? 'DeplAI' : 'Code View'}
+                  </span>
+                </Link>
+              )}
             </div>
 
+            {previewOpen ? (
+              <button
+                onClick={handleExitPreview}
+                className="p-2 text-muted hover:text-foreground rounded-lg transition"
+                title="Exit Preview"
+                aria-label="Exit Preview"
+              >
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M18 6L6 18" /><path d="M6 6l12 12" />
+                </svg>
+              </button>
+            ) : (
             <div className="flex items-center space-x-3">
+              {!chatOpen && (
+                <button
+                  onClick={handlePreviewButtonClick}
+                  disabled={savingProject}
+                  className={`p-2 rounded-lg transition ${
+                    savingProject
+                      ? 'text-muted opacity-40 cursor-not-allowed'
+                      : 'text-muted hover:text-foreground hover:bg-[#fffafa] dark:hover:bg-surface-hover'
+                  }`}
+                  title="Live Preview"
+                  aria-label="Live Preview"
+                >
+                  <LivePreviewIcon size={24} />
+                </button>
+              )}
               <button
                 onClick={() => {
                   if (chatOpen) { handleExitChat(); return; }
@@ -466,9 +594,10 @@ function RepositoryBrowserContent() {
                 </button>
               )}
             </div>
+            )}
           </div>
 
-          {!chatOpen && (
+          {!chatOpen && !previewOpen && (
             <div className="flex items-center justify-between mt-3">
               <div className="flex items-center space-x-2 text-sm">
                 {breadcrumbs.map((crumb, index) => (
@@ -549,7 +678,9 @@ function RepositoryBrowserContent() {
         </div>
       </header>
 
-      {chatOpen ? (
+      {previewOpen ? (
+        <LivePreviewPanel projectId={projectId} onRetry={handleRetryPreview} onExit={doExitPreview} />
+      ) : chatOpen ? (
         <ChatInterface username={username} onExit={handleExitChat} projectId={projectId} />
       ) : (
       <>
@@ -718,6 +849,63 @@ function RepositoryBrowserContent() {
             handleOpenChat(selection);
           }}
         />
+      )}
+
+      {previewBranchModalOpen && !isLocal && (
+        <BranchSelectModal
+          mode="preview"
+          owner={owner}
+          repo={repo}
+          projectId={projectId}
+          defaultBranch={defaultBranch || currentBranch || 'main'}
+          onClose={() => setPreviewBranchModalOpen(false)}
+          onConfirm={(selection) => {
+            setPreviewBranchModalOpen(false);
+            handleStartPreview(selection);
+          }}
+        />
+      )}
+
+      {exitPreviewPopupOpen && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center animate-[fadeIn_150ms_ease-out]">
+          <div
+            className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+            onClick={() => setExitPreviewPopupOpen(false)}
+          />
+          <div className="relative w-full max-w-md mx-4 rounded-2xl shadow-2xl bg-surface border border-border animate-[scaleIn_200ms_ease-out]">
+            <button
+              onClick={() => setExitPreviewPopupOpen(false)}
+              className="absolute top-4 right-4 p-1.5 text-muted hover:text-foreground rounded-lg transition"
+              aria-label="Close"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                <path d="M18 6L6 18" /><path d="M6 6l12 12" />
+              </svg>
+            </button>
+
+            <div className="px-8 pt-8 pb-6">
+              <h2 className="text-xl font-bold text-foreground">Exit Live Preview</h2>
+              <p className="text-muted text-sm mt-2 leading-relaxed">
+                This will stop the preview and shut down its environment. You can start it again anytime.
+              </p>
+            </div>
+
+            <div className="px-8 pb-8 flex items-center justify-end gap-2.5">
+              <button
+                onClick={() => setExitPreviewPopupOpen(false)}
+                className="py-2.5 px-5 text-sm font-medium text-foreground hover:bg-surface-hover rounded-lg border border-border transition"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={doExitPreview}
+                className="py-2.5 px-6 text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition"
+              >
+                Exit Preview
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {exitPopupOpen && (

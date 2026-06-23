@@ -168,7 +168,7 @@ function ChatInput({ input, onChange, onKeyDown, onSend, canSend }: {
   }, [input]);
 
   return (
-    <div className="flex items-end gap-3 bg-surface border border-border rounded-2xl px-4 py-3">
+    <div className="relative flex bg-surface border border-border rounded-2xl px-4 py-3">
       <textarea
         ref={textareaRef}
         value={input}
@@ -176,15 +176,15 @@ function ChatInput({ input, onChange, onKeyDown, onSend, canSend }: {
         onKeyDown={onKeyDown}
         placeholder="What UI tweak do you want to implement?"
         rows={1}
-        className="flex-1 bg-transparent text-foreground placeholder-muted outline-none resize-none text-sm scrollbar-hidden"
+        className="flex-1 bg-transparent text-foreground placeholder-muted outline-none resize-none text-sm scrollbar-hidden pr-10"
       />
       {input.trim() && (
         <button
           onClick={onSend}
           disabled={!canSend}
-          className={`p-2 rounded-lg bg-blue-600 text-white transition ${canSend ? 'hover:bg-blue-700' : 'opacity-40 cursor-not-allowed'}`}
+          className={`absolute bottom-1 right-3 p-2 text-blue-600 transition ${canSend ? 'hover:text-blue-700' : 'opacity-40 cursor-not-allowed'}`}
         >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
             <path d="M22 2L11 13" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
             <path d="M22 2L15 22L11 13L2 9L22 2Z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
           </svg>

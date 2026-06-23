@@ -29,7 +29,7 @@ async def run(codebase_path: str) -> BuilderResult:
 
     options = ClaudeAgentOptions(
         model="sonnet",
-        allowed_tools=["Read", "Glob", "Grep", "Edit", "Bash"],
+        allowed_tools=["Read", "Glob", "Grep", "Edit", "Bash", "Monitor"],
         permission_mode="acceptEdits",
         cwd=codebase_path,
         max_turns=50,

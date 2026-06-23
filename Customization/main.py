@@ -10,9 +10,18 @@ from models import (
     CustomizeValidationRequest,
     CustomizeValidationResponse,
     WebSocketCommand,
+    PreviewValidationRequest,
+    PreviewWebSocketCommand,
 )
 from runner import CustomizationRunner
-from utils import remove_customize_container, cleanup_volumes
+from preview import PreviewRunner
+from utils import (
+    remove_customize_container,
+    cleanup_volumes,
+    remove_preview_container,
+    remove_preview_gateway,
+    remove_preview_volume,
+)
 
 load_dotenv()
 
@@ -38,6 +47,9 @@ app.add_middleware(
 customize_contexts: dict[str, CustomizeValidationRequest] = {}
 active_customizations: dict[str, CustomizationRunner] = {}
 
+preview_contexts: dict[str, PreviewValidationRequest] = {}
+active_previews: dict[str, PreviewRunner] = {}
+
 ACTIVE_STATUSES = frozenset({
     "running", "executing", "building", "build_fixing", "saving",
 })
@@ -59,6 +71,90 @@ async def validate_customize(request: CustomizeValidationRequest):
     customize_contexts[request.project_id] = request
     logger.info("Customize context stored for project %s (%s)", request.project_id, request.project_name)
     return CustomizeValidationResponse(success=True, message="Customize context stored")
+
+
+async def _stop_all_previews():
+    """Single global preview environment (fixed container/volume/gateway names):
+    stop every active preview, including one for a different project, so two
+    sessions can never fight over the shared resources or leave a dangling runner."""
+    for pid in list(active_previews):
+        runner = active_previews.pop(pid, None)
+        if runner:
+            await runner.stop()
+
+
+@app.post("/api/preview/validate", response_model=CustomizeValidationResponse, dependencies=[Depends(verify_api_key)])
+async def validate_preview(request: PreviewValidationRequest):
+    await _stop_all_previews()
+
+    preview_contexts[request.project_id] = request
+    logger.info("Preview context stored for project %s (%s)", request.project_id, request.project_name)
+    return CustomizeValidationResponse(success=True, message="Preview context stored")
+
+
+@app.websocket("/ws/preview/{project_id}")
+async def websocket_preview(websocket: WebSocket, project_id: str, token: str = ""):
+    if API_KEY and token != API_KEY:
+        await websocket.close(code=4001, reason="Unauthorized")
+        return
+
+    await websocket.accept()
+    logger.info("Preview WebSocket connected for project %s", project_id)
+
+    local_runner: PreviewRunner | None = None
+
+    try:
+        while True:
+            raw = await websocket.receive_text()
+            cmd = PreviewWebSocketCommand.model_validate_json(raw)
+
+            if cmd.action == "start":
+                await _stop_all_previews()
+
+                context = preview_contexts.get(project_id)
+                if not context:
+                    await websocket.send_json({"type": "error", "data": "No preview context found. Please validate first."})
+                    continue
+
+                runner = PreviewRunner(websocket, project_id, context)
+                active_previews[project_id] = runner
+                local_runner = runner
+
+                async def run_preview_workflow(r: PreviewRunner, pid: str):
+                    try:
+                        await r.run()
+                    except Exception as e:
+                        logger.error("Preview workflow failed for %s: %s", pid, e, exc_info=True)
+
+                asyncio.create_task(run_preview_workflow(runner, project_id))
+
+            elif cmd.action == "stop":
+                runner = local_runner or active_previews.pop(project_id, None)
+                if runner:
+                    await runner.stop()
+                    active_previews.pop(project_id, None)
+
+    except (WebSocketDisconnect, RuntimeError):
+        logger.info("Preview WebSocket disconnected for project %s", project_id)
+        if local_runner:
+            local_runner.detach()
+    except Exception as e:
+        logger.error("Preview WebSocket error for project %s: %s", project_id, e, exc_info=True)
+
+
+@app.post("/api/preview/stop/{project_id}", dependencies=[Depends(verify_api_key)])
+async def stop_preview(project_id: str):
+    runner = active_previews.pop(project_id, None)
+    if not runner:
+        # No tracked runner (e.g. WS already gone): still ensure resources are gone.
+        await asyncio.to_thread(remove_preview_container)
+        await asyncio.to_thread(remove_preview_gateway)
+        await asyncio.to_thread(remove_preview_volume)
+        preview_contexts.pop(project_id, None)
+        return {"success": True, "message": "Preview stopped"}
+    await runner.stop()
+    preview_contexts.pop(project_id, None)
+    return {"success": True, "message": "Preview stopped"}
 
 
 @app.websocket("/ws/customize/{project_id}")
@@ -164,6 +260,11 @@ async def cleanup(request: Request):
         if runner:
             await runner.teardown(discard=discard)
         customize_contexts.pop(project_id, None)
+
+        preview_runner = active_previews.pop(project_id, None)
+        if preview_runner:
+            await preview_runner.stop()
+        preview_contexts.pop(project_id, None)
         return {"success": True, "message": "Session closed"}
 
     # Full cleanup (logout): tear down every session and remove the container + volume.
@@ -172,7 +273,15 @@ async def cleanup(request: Request):
     customize_contexts.clear()
     active_customizations.clear()
 
+    for preview_runner in active_previews.values():
+        preview_runner.cancel()
+    preview_contexts.clear()
+    active_previews.clear()
+
     await asyncio.to_thread(remove_customize_container)
+    await asyncio.to_thread(remove_preview_container)
+    await asyncio.to_thread(remove_preview_gateway)
+    await asyncio.to_thread(remove_preview_volume)
 
     success, error_msg = await asyncio.to_thread(cleanup_volumes)
     if not success:
