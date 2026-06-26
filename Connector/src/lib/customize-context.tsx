@@ -299,6 +299,7 @@ export function CustomizeProvider({ children }: { children: React.ReactNode }) {
       action: 'chat',
       data: { message },
     }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- addChatMessage/connectWs are stable; this sender is intentionally created once
   }, []);
 
   const respondToDiff = useCallback((projectId: string, requestId: number, approved: boolean) => {

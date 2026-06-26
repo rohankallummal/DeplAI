@@ -13,16 +13,17 @@ import { GradientText, TextType } from '@/components/text-animation';
 import { usePopup } from '@/components/toast-notification';
 import Lottie from 'lottie-react';
 import deployingAnimation from '@/components/animation/deploying.json';
+import type { Project } from '@/lib/types';
 
 interface ProjectsProps {
-  installations: any[];
-  projects: any[];
+  installations: unknown[];
+  projects: Project[];
   loading: boolean;
   uploading: boolean;
   fileInputRef: React.RefObject<HTMLInputElement | null>;
   handleFileUpload: (event: React.ChangeEvent<HTMLInputElement>) => void;
   handleDeleteProject: (projectId: string, projectName: string) => void;
-  handleProjectClick: (project: any) => void;
+  handleProjectClick: (project: Project) => void;
   startScan: (projectId: string, projectName: string) => void;
   activeScanIds: string[];
   activeRemediationIds: string[];
@@ -107,7 +108,7 @@ export default function Projects({
   const [filter, setFilter] = useState<'none' | 'github' | 'local'>('none');
   const [showFilterDropdown, setShowFilterDropdown] = useState(false);
   const [scanModalOpen, setScanModalOpen] = useState(false);
-  const [selectedProject, setSelectedProject] = useState<any>(null);
+  const [selectedProject, setSelectedProject] = useState<Project | null>(null);
 
   const [deployMode, setDeployMode] = useState(false);
   const [deploySelectedId, setDeploySelectedId] = useState<string | null>(null);
@@ -131,16 +132,17 @@ export default function Projects({
 
       if (p.type === 'github') {
         const fullName = `${p.owner}/${p.repo}`;
-        if (createdRepos.some((r: any) => r.fullName === fullName)) {
+        if (createdRepos.some((r) => r.fullName === fullName)) {
           ids.add(p.id);
         }
       }
     }
 
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- derived set recomputed only when the projects list changes
     setRemediatedIds(ids);
   }, [projects]);
 
-  const handleScanClick = (project: any) => {
+  const handleScanClick = (project: Project) => {
     setSelectedProject(project);
     setScanModalOpen(true);
   };

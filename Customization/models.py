@@ -123,7 +123,9 @@ class WebSocketCommand(BaseModel):
 
 
 class PreviewWebSocketCommand(BaseModel):
-    action: Literal["start", "stop"]
+    # Teardown is handled exclusively by POST /api/preview/stop (the single
+    # authoritative cleanup path); the socket only starts a preview.
+    action: Literal["start"]
     data: Optional[dict] = None
 
 

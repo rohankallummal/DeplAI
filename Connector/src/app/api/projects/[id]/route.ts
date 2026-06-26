@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getErrorMessage } from '@/lib/backend';
 import { requireAuth, verifyLocalProjectAccess } from '@/lib/auth';
-import { query } from '@/lib/db';
+import { query, type Row } from '@/lib/db';
 import { deleteProject } from '@/lib/local-projects';
 import { SECURITY_URL, securityHeaders, logSecurityError } from '@/lib/security';
 
@@ -21,7 +22,7 @@ export async function DELETE(
 
     try {
       deleteProject(user.id, projectId);
-    } catch (fsError: any) {
+    } catch (fsError) {
       console.error('Filesystem deletion error:', fsError);
     }
 
@@ -50,10 +51,10 @@ export async function DELETE(
         name: project.name,
       },
     });
-  } catch (error: any) {
+  } catch (error) {
     console.error('Delete project error:', error);
     return NextResponse.json(
-      { error: error.message || 'Failed to delete project' },
+      { error: getErrorMessage(error, 'Failed to delete project') },
       { status: 500 }
     );
   }
@@ -69,7 +70,7 @@ export async function GET(
     const { user, error } = await requireAuth();
     if (error) return error;
 
-    const [project] = await query<any[]>(
+    const [project] = await query<Row[]>(
       `SELECT
         p.id,
         p.name,
@@ -115,7 +116,7 @@ export async function GET(
       return NextResponse.json({ project: response });
     }
 
-    const [ghRepo] = await query<any[]>(
+    const [ghRepo] = await query<Row[]>(
       `SELECT
         r.id,
         r.full_name,
@@ -158,7 +159,7 @@ export async function GET(
     };
 
     return NextResponse.json({ project: response });
-  } catch (error: any) {
+  } catch (error) {
     console.error('Get project error:', error);
     return NextResponse.json(
       { error: 'Failed to fetch project' },

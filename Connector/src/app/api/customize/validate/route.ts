@@ -23,7 +23,7 @@ export async function POST(request: NextRequest) {
       pr_number,
     } = body;
 
-    const backendPayload: Record<string, any> = {
+    const backendPayload: Record<string, unknown> = {
       project_id,
       project_name,
       project_type,
@@ -107,7 +107,7 @@ export async function POST(request: NextRequest) {
 
     const data = await response.json();
     return NextResponse.json(data);
-  } catch (err: any) {
+  } catch (err) {
     logCustomizeError('Customize', err);
     if (isConnectionRefused(err)) return customizeUnavailableResponse();
     return NextResponse.json(

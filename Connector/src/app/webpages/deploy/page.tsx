@@ -8,13 +8,15 @@ import ThemeToggle from '@/components/theme-toggle';
 import { usePageLoading } from '@/lib/page-loading-context';
 import { CostEstimation } from '@/components/cost-estimation';
 import { PostDeploymentDashboard } from '@/components/post-deployment-dashboard';
-import { useDeploy, type CostData } from '@/lib/deploy-context';
+import { useDeploy, type CostData, ACTIVE_PHASES } from '@/lib/deploy-context';
+import { useBackendWatch } from '@/lib/backend-monitor-context';
 import DeployQACard from '@/components/deploy-qa-card';
 import loading3d1Animation from '@/components/animation/loading-3d-1.json';
 import loading3d2Animation from '@/components/animation/loading-3d-2.json';
 import loading3d3Animation from '@/components/animation/loading-3d-3.json';
 import costAnimation from '@/components/animation/cost.json';
 import tickAnimation from '@/components/animation/tick.json';
+import alertAnimation from '@/components/animation/alert.json';
 
 export default function DeployPage() {
   return (
@@ -51,10 +53,28 @@ function DeployPageContent() {
   const phase = deployState?.phase || 'idle';
   const hasStarted = useRef(false);
 
+  // Watch the Deploy backend while a deployment is in flight. On outage, reset
+  // this deploy and return Home.
+  // Include 'error': deploy-context flips to 'error' on a dropped socket, so
+  // excluding it would tear the watch down before the health re-check runs. The
+  // health check decides the modal — a real deploy error with a live backend
+  // shows the ErrorState/Retry UI, not the modal.
+  useBackendWatch({
+    active: !!projectId && (ACTIVE_PHASES.includes(phase) || phase === 'error'),
+    service: 'deploy',
+    recheckSignal: phase === 'error',
+    onRecover: () => {
+      if (projectId) resetDeploy(projectId);
+      router.push('/');
+    },
+  });
+
   usePageLoading(loading || phase === 'idle');
 
   useEffect(() => {
+
     checkAuth();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount
   }, []);
 
   useEffect(() => {
@@ -62,6 +82,7 @@ function DeployPageContent() {
       resetDeploy(projectId);
       router.push('/');
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- react only to phase transitions; projectId/resetDeploy/router are stable
   }, [phase]);
 
   useEffect(() => {
@@ -73,8 +94,10 @@ function DeployPageContent() {
         return;
       }
 
+
       initiateDeploy();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- start once when loading/projectInfo first ready (guarded by hasStarted)
   }, [loading, projectId, projectInfo]);
 
   async function checkAuth() {
@@ -343,12 +366,8 @@ function ErrorState({
 
   return (
     <div className="flex flex-col items-center justify-center min-h-[60vh]">
-      <div className="w-16 h-16 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center mb-4">
-        <svg className="w-9 h-9 text-red-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-          <circle cx="12" cy="12" r="10" />
-          <line x1="15" y1="9" x2="9" y2="15" />
-          <line x1="9" y1="9" x2="15" y2="15" />
-        </svg>
+      <div className="w-28 h-28 mb-4">
+        <Lottie animationData={alertAnimation} loop />
       </div>
       <h2 className="text-xl font-semibold text-foreground">Deployment Failed</h2>
       {lastError && (

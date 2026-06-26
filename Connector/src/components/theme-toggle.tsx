@@ -27,6 +27,7 @@ export default function ThemeToggle() {
 
   useEffect(() => {
     const dark = localStorage.getItem('theme') !== 'light';
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- hydration-safe: theme comes from localStorage on mount (unavailable during SSR)
     setIsDark(dark);
     applyTheme(dark);
     setMounted(true);

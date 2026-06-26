@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getErrorMessage } from '@/lib/backend';
 import { requireAuth } from '@/lib/auth';
 import { query } from '@/lib/db';
 import { extractZipToProject } from '@/lib/local-projects';
@@ -74,10 +75,10 @@ export async function POST(request: NextRequest) {
         sizeBytes,
       },
     });
-  } catch (error: any) {
+  } catch (error) {
     console.error('Upload error:', error);
     return NextResponse.json(
-      { error: error.message || 'Failed to upload project' },
+      { error: getErrorMessage(error, 'Failed to upload project') },
       { status: 500 }
     );
   }

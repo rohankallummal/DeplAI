@@ -69,6 +69,7 @@ export function GradientText({
   useEffect(() => {
     elapsedRef.current = 0;
     progress.set(0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `progress` is a stable motion value
   }, [animationSpeed, yoyo]);
 
   const backgroundPosition = useTransform(progress, p =>
@@ -189,6 +190,7 @@ export function TextType({
         }, deletingSpeed);
         return () => clearTimeout(timeout);
       } else {
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- typewriter state machine advances to the next text on each tick
         setIsDeleting(false);
         const nextIndex = (textIndex + 1) % texts.length;
         setTextIndex(nextIndex);
@@ -261,7 +263,7 @@ export const LandingTextAnimation: React.FC<LandingTextAnimationProps> = ({
     el.style.backgroundSize = '200% auto';
     el.style.webkitBackgroundClip = 'text';
     el.style.backgroundClip = 'text';
-    (el.style as any).webkitTextFillColor = 'transparent';
+    el.style.setProperty('-webkit-text-fill-color', 'transparent');
     shinyTweenRef.current = gsap.fromTo(
       el,
       { backgroundPosition: '150% center' },
@@ -373,6 +375,7 @@ export const LandingTextAnimation: React.FC<LandingTextAnimationProps> = ({
     };
   }, [resetToIdle, cleanup]);
 
+  // eslint-disable-next-line react-hooks/refs -- read current animation state from a ref to render this frame
   const state = stateRef.current;
 
   return (

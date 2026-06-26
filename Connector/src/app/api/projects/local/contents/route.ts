@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getErrorMessage } from '@/lib/backend';
 import { requireAuth, verifyLocalProjectAccess } from '@/lib/auth';
 import { getDirectoryContents } from '@/lib/local-projects';
 
@@ -24,10 +25,10 @@ export async function GET(request: NextRequest) {
     const contents = getDirectoryContents(user.id, projectId, path);
 
     return NextResponse.json({ contents });
-  } catch (error: any) {
+  } catch (error) {
     console.error('Error fetching local project contents:', error);
     return NextResponse.json(
-      { error: error.message || 'Failed to fetch contents' },
+      { error: getErrorMessage(error, 'Failed to fetch contents') },
       { status: 500 }
     );
   }

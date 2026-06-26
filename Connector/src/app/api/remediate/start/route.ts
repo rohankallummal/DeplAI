@@ -28,7 +28,7 @@ export async function POST(request: NextRequest) {
 
     const data = await response.json();
     return NextResponse.json(data);
-  } catch (error: any) {
+  } catch (error) {
     logSecurityError('Remediation start', error);
     if (isConnectionRefused(error)) return securityUnavailableResponse();
     return NextResponse.json(

@@ -153,3 +153,34 @@ def clear_agent_artifacts() -> None:
         )
     except Exception:
         pass
+
+
+def read_artifact_file(path: str) -> str | None:
+    try:
+        output = get_docker_client().containers.run(
+            "alpine",
+            command=["cat", f"/vol/{path}"],
+            volumes={AGENT_ARTIFACTS_VOLUME: {"bind": "/vol", "mode": "ro"}},
+            remove=True,
+        )
+        return decode_output(output)
+    except Exception:
+        return None
+
+
+def find_latest_cycle() -> int | None:
+    try:
+        output = get_docker_client().containers.run(
+            "alpine",
+            command=["sh", "-c", "ls -1 /vol/security 2>/dev/null"],
+            volumes={AGENT_ARTIFACTS_VOLUME: {"bind": "/vol", "mode": "ro"}},
+            remove=True,
+        )
+    except Exception:
+        return None
+    nums = [
+        int(m.group(1))
+        for line in decode_output(output).splitlines()
+        if (m := re.fullmatch(r"cycle(\d+)", line.strip()))
+    ]
+    return max(nums) if nums else None

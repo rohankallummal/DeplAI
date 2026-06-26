@@ -49,6 +49,7 @@ export function PostDeploymentDashboard({
 
   useEffect(() => {
     fetchOutputs();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- refetch only when projectId changes; fetchOutputs is stable
   }, [projectId]);
 
   async function fetchOutputs() {

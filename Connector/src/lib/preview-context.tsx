@@ -68,10 +68,12 @@ export function PreviewProvider({ children }: { children: React.ReactNode }) {
     });
   }
 
-  // Surface an error only if the session hasn't already reached a terminal state.
-  // Used by the post-open close/error handlers so a drop mid-pipeline doesn't
-  // leave the panel spinning forever, while an intentional close (handlers nulled
-  // first) or a post-ready drop is ignored.
+  // Surface an error on an unexpected drop so the panel can't spin forever (an
+  // intentional close — handlers nulled first — or a post-ready drop is ignored;
+  // a ready preview keeps serving its iframe through the gateway). When the drop
+  // is because the backend went away, the BackendMonitor keeps the preview watch
+  // active through this 'error' state and overlays the Services Unavailable modal;
+  // a drop with a healthy backend just leaves this error screen + Try Again.
   function failIfPending(projectId: string, message: string) {
     updateProject(projectId, existing =>
       existing.phase === 'ready' || existing.phase === 'error'
@@ -82,7 +84,7 @@ export function PreviewProvider({ children }: { children: React.ReactNode }) {
 
   function createWsMessageHandler(projectId: string) {
     return (event: MessageEvent) => {
-      let data: any;
+      let data: { type?: string; status?: string; data?: { url?: string } | string };
       try {
         data = JSON.parse(event.data);
       } catch {
@@ -91,12 +93,17 @@ export function PreviewProvider({ children }: { children: React.ReactNode }) {
 
       switch (data.type) {
         case 'status': {
-          const phase = VALID_PHASES.includes(data.status) ? (data.status as PreviewPhase) : 'error';
+          const status = (data.status ?? '') as PreviewPhase;
+          const phase = VALID_PHASES.includes(status) ? status : 'error';
           updateProject(projectId, () => ({ phase }));
           break;
         }
         case 'ready': {
-          updateProject(projectId, () => ({ phase: 'ready', url: data.data?.url || null, error: null }));
+          const d = data.data;
+          // `typeof null === 'object'`, so guard against a null frame before
+          // reading `.url` (avoids a TypeError that would strand the spinner).
+          const url = d && typeof d === 'object' ? (d.url ?? null) : null;
+          updateProject(projectId, () => ({ phase: 'ready', url, error: null }));
           break;
         }
         case 'error': {
@@ -119,9 +126,11 @@ export function PreviewProvider({ children }: { children: React.ReactNode }) {
       ws.onopen = () => {
         ws.send(JSON.stringify({ action: 'start' }));
         wsRefs.current[projectId] = ws;
-        // Once open, swap in handlers that surface an unexpected drop as an error
-        // (the pre-open reject below can no longer fire on an already-settled
-        // promise). Only delete the ref if it still points at this socket.
+        // Once open, surface an unexpected drop as an error so the panel can't
+        // spin forever. The BackendMonitor keeps the preview watch active through
+        // 'error' and overlays the Services Unavailable modal when the drop is
+        // because the backend went away. Only delete the ref if it still points
+        // at this socket.
         ws.onerror = () => failIfPending(projectId, 'Lost connection to the preview service.');
         ws.onclose = () => {
           if (wsRefs.current[projectId] === ws) delete wsRefs.current[projectId];
@@ -142,16 +151,22 @@ export function PreviewProvider({ children }: { children: React.ReactNode }) {
     try {
       await connectWs(projectId);
     } catch {
+      // Backend unreachable at start. Surface an error (so the panel doesn't hang
+      // on the loading state); the BackendMonitor overlays the Services
+      // Unavailable modal once its health check confirms the outage.
       updateProject(projectId, () => ({ phase: 'error', error: 'Preview service is not available.' }));
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- connectWs is stable; this starter callback is created once
   }, []);
 
   const stopPreview = useCallback(async (projectId: string) => {
-    const ws = wsRefs.current[projectId];
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ action: 'stop' }));
-    }
-    detachAndClose(ws);
+    // Close the socket WITHOUT sending a teardown command. The backend's
+    // disconnect handler only detaches the runner (it does not remove
+    // containers), leaving the HTTP endpoint below as the single authoritative
+    // teardown path. Triggering both used to race two concurrent force-removes
+    // of the same containers, which Docker logged as 409 "removal already in
+    // progress".
+    detachAndClose(wsRefs.current[projectId]);
     delete wsRefs.current[projectId];
     setStates(prev => {
       const next = { ...prev };

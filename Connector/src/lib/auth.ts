@@ -2,9 +2,16 @@ import { getIronSession } from 'iron-session';
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { sessionOptions, SessionData } from './session';
-import { query } from './db';
+import { query, type Row } from './db';
 
-type AccessResult = { project: any; error?: never } | { project?: never; error: NextResponse };
+export interface ProjectAccess {
+  id: string;
+  name: string;
+  project_type: string;
+  user_id: string;
+}
+
+type AccessResult = { project: ProjectAccess; error?: never } | { project?: never; error: NextResponse };
 
 const projectNotFound = () =>
   NextResponse.json({ error: 'Project not found' }, { status: 404 });
@@ -13,7 +20,7 @@ const projectForbidden = () =>
   NextResponse.json({ error: 'Forbidden: You do not own this project' }, { status: 403 });
 
 async function fetchLocalProject(projectId: string) {
-  const [project] = await query<any[]>(
+  const [project] = await query<ProjectAccess[]>(
     `SELECT id, name, project_type, user_id
      FROM projects
      WHERE id = ?`,
@@ -60,7 +67,7 @@ export async function verifyInstallationOwnership(
   userId: string,
   installationId: string
 ): Promise<boolean> {
-  const [result] = await query<any[]>(
+  const [result] = await query<Row[]>(
     `SELECT id FROM github_installations
      WHERE id = ? AND user_id = ?`,
     [installationId, userId]
@@ -91,7 +98,7 @@ export async function verifyAnyProjectAccess(
     return { project: localProject };
   }
 
-  const [ghRepo] = await query<any[]>(
+  const [ghRepo] = await query<Row[]>(
     `SELECT r.id, r.full_name, i.user_id
      FROM github_repositories r
      JOIN github_installations i ON i.id = r.installation_id
@@ -109,7 +116,7 @@ export async function verifyRepositoryOwnership(
   owner: string,
   repo: string
 ): Promise<{ installationId: string; suspended: boolean } | null> {
-  const [result] = await query<any[]>(
+  const [result] = await query<Row[]>(
     `SELECT r.installation_id, i.id as installation_uuid, i.suspended_at
      FROM github_repositories r
      JOIN github_installations i ON i.id = r.installation_id

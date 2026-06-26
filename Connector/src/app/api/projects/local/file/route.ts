@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getErrorMessage } from '@/lib/backend';
 import { requireAuth, verifyLocalProjectAccess } from '@/lib/auth';
 import { getFileContents } from '@/lib/local-projects';
 
@@ -24,10 +25,10 @@ export async function GET(request: NextRequest) {
     const content = getFileContents(user.id, projectId, filePath);
 
     return NextResponse.json({ content, path: filePath });
-  } catch (error: any) {
+  } catch (error) {
     console.error('Error fetching local project file:', error);
     return NextResponse.json(
-      { error: error.message || 'Failed to fetch file' },
+      { error: getErrorMessage(error, 'Failed to fetch file') },
       { status: 500 }
     );
   }

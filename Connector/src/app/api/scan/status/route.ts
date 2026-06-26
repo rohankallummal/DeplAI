@@ -25,7 +25,7 @@ export async function GET(request: NextRequest) {
 
     const data = await response.json();
     return NextResponse.json(data);
-  } catch (error: any) {
+  } catch (error) {
     logSecurityError('Scan status', error);
     return NextResponse.json({ status: 'not_initiated' });
   }

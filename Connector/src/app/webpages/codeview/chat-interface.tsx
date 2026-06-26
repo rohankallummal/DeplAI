@@ -209,6 +209,7 @@ export default function ChatInterface({
   const [input, setInput] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- `messages` is a render-derived array; the dependent scroll effect re-running is benign
   const messages = state.chatMessages ?? [];
   const phase = state.phase ?? 'idle';
   const builderStatus = state.builderStatus ?? 'idle';

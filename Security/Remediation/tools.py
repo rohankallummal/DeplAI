@@ -17,9 +17,13 @@ WORKSPACE_PATH = "/workspace"
 
 def _ensure_cycle_dir(cycle_num: int) -> str:
     cycle_dir = f"security/cycle{cycle_num}"
+    # The scanner containers run as root, but write_condensed_scan_data() runs
+    # in-process as the agent uid (1000). Create the dir owned by the agent so
+    # that in-process write of scan_data.json succeeds; root scanners can still
+    # write their reports into an agent-owned dir.
     get_docker_client().containers.run(
         "alpine",
-        command=["mkdir", "-p", f"/vol/{cycle_dir}"],
+        command=["sh", "-c", f"mkdir -p /vol/{cycle_dir} && chown -R 1000:1000 /vol/{cycle_dir}"],
         volumes=ARTIFACT_VOLUMES,
         remove=True,
     )

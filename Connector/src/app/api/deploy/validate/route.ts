@@ -21,7 +21,7 @@ export async function POST(request: NextRequest) {
     const ownership = await verifyAnyProjectAccess(user.id, project_id);
     if (ownership.error) return ownership.error;
 
-    const backendPayload: Record<string, any> = {
+    const backendPayload: Record<string, unknown> = {
       project_id,
       project_name,
       project_type,
@@ -54,7 +54,7 @@ export async function POST(request: NextRequest) {
 
     const data = await response.json();
     return NextResponse.json(data);
-  } catch (err: any) {
+  } catch (err) {
     logDeployError('Deploy', err);
     if (isConnectionRefused(err)) return deployUnavailableResponse();
     return NextResponse.json(

@@ -11,7 +11,7 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
 )
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Header, HTTPException, Depends
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Header, HTTPException, Depends, Response
 from fastapi.middleware.cors import CORSMiddleware
 from models import (
     ScanValidationRequest, ScanValidationResponse,
@@ -22,13 +22,14 @@ from models import (
 )
 import publish_tokens
 from scans.environment import EnvironmentInitializer
-from Remediation.runner import RemediationRunner, reset_last_project
+from Remediation.runner import RemediationRunner, reset_last_project, get_last_project
 from scans.cleanup import cleanup_volumes, cleanup_project_reports
 from utils import remove_remediation_container
 from scans.result_parser import get_scan_results, get_scan_status, invalidate_cache, clear_cache
 from runner_base import RunnerBase
 from Publish.create_repo import create_repo
 from Publish.create_pr import create_pr
+from report import render_vulnerability_report_pdf
 
 logger = logging.getLogger(__name__)
 
@@ -211,9 +212,11 @@ async def validate_remediation(request: RemediationValidationRequest):
 async def websocket_remediate(websocket: WebSocket, project_id: str):
     def _on_remediation_done(pid, runner):
         if hasattr(runner, 'remediation_result') and runner.remediation_result:
-            remediation_statuses[pid] = (
-                'remediated' if runner.remediation_result.get('success') else 'not_remediated'
-            )
+            status = runner.remediation_result.get('status')
+            remediation_statuses[pid] = {
+                "remediated": "remediated",
+                "partially_remediated": "partially_remediated",
+            }.get(status, "not_remediated")
 
     await _handle_websocket(
         websocket, project_id,
@@ -245,6 +248,28 @@ async def operation_status(project_id: str):
         "remediation": _op_active(active_remediations.get(project_id)),
         "remediation_status": remediation_statuses.get(project_id),
     }
+
+
+@app.get("/api/security/report-pdf/{project_id}", dependencies=[Depends(verify_api_key)])
+async def get_report_pdf(project_id: str):
+    # The agent artifacts volume holds only the most-recently-remediated project's
+    # cycles (it's cleared on project switch), so a report can only be built for
+    # that project. Refuse other ids rather than return another project's report.
+    if get_last_project() != project_id:
+        raise HTTPException(status_code=404, detail="Vulnerability report not available")
+
+    ctx = remediation_contexts.get(project_id) or scan_contexts.get(project_id)
+    project_name = ctx.project_name if ctx else ""
+
+    pdf_bytes = await asyncio.to_thread(render_vulnerability_report_pdf, project_id, project_name)
+    if pdf_bytes is None:
+        raise HTTPException(status_code=404, detail="Vulnerability report not available")
+
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": 'attachment; filename="vulnerability-report.pdf"'},
+    )
 
 
 @app.post("/api/publish/token", dependencies=[Depends(verify_api_key)])

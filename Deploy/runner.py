@@ -382,6 +382,14 @@ class DeployRunner(RunnerBase):
 
     def _copy_codebase_to_volume(self) -> tuple[bool, str]:
         try:
+            if getattr(self.context, "project_type", None) == "github":
+                return self._clone_github_repo()
+            return self._copy_local_codebase()
+        except Exception as e:
+            return (False, str(e))
+
+    def _copy_local_codebase(self) -> tuple[bool, str]:
+        try:
             user_id = self.context.user_id
             project_id = self.project_id
 
@@ -427,6 +435,73 @@ class DeployRunner(RunnerBase):
             except Exception as e:
                 return (False, str(e))
 
+        except Exception as e:
+            return (False, str(e))
+
+    def _clone_github_repo(self) -> tuple[bool, str]:
+        try:
+            token = self.context.github_token
+            repo_url = self.context.repository_url
+            if not repo_url or not token:
+                return (False, "Missing repository URL or GitHub token")
+
+            clone_url = repo_url.replace(
+                "https://github.com/",
+                f"https://x-access-token:{token}@github.com/",
+            )
+            if not clone_url.endswith(".git"):
+                clone_url += ".git"
+
+            logger.info(f"Cloning GitHub repo into Docker volume for project {self.project_id}")
+
+            # Empty the target (as the agent that owns the volume) so git can clone
+            # into it.
+            self._container.exec_run(
+                ["sh", "-c", "rm -rf /workspace/codebase/* /workspace/codebase/.[!.]* /workspace/codebase/..?* 2>/dev/null || true"],
+                user="agent",
+            )
+
+            # Clone in an ephemeral alpine/git container. It runs as root against
+            # the agent-owned volume dir, so git's CVE-2022-24765 ownership check
+            # would reject it ("dubious ownership"); GIT_CONFIG safe.directory='*'
+            # trusts any dir. The token-bearing URL is passed via env, not argv.
+            clone_ctr = get_docker_client().containers.run(
+                "alpine/git",
+                entrypoint="sh",
+                # Strip .git after cloning so the codebase the deploy agent reads
+                # matches the local-copy path (just source files, no git internals).
+                command=["-c", 'git clone --depth 1 "$REPO_URL" /workspace/codebase && rm -rf /workspace/codebase/.git'],
+                volumes={CODEBASE_VOLUME: {"bind": "/workspace/codebase", "mode": "rw"}},
+                # alpine/git declares VOLUME /git (its workdir); without covering it
+                # Docker spawns a hash-named anonymous volume on every run. Mount a
+                # tmpfs over it so none is created (mirrors the Customize runner).
+                tmpfs={"/git": ""},
+                environment={
+                    "REPO_URL": clone_url,
+                    "GIT_CONFIG_COUNT": "1",
+                    "GIT_CONFIG_KEY_0": "safe.directory",
+                    "GIT_CONFIG_VALUE_0": "*",
+                },
+                detach=True,
+            )
+            try:
+                result = clone_ctr.wait()
+                logs = decode_output(clone_ctr.logs())
+            finally:
+                try:
+                    clone_ctr.remove(force=True)
+                except Exception:
+                    pass
+
+            if result.get("StatusCode", -1) != 0:
+                logger.error(
+                    "Clone failed for %s: %s",
+                    self.project_id, logs.replace(token, "***") if token else logs,
+                )
+                return (False, "Could not clone the GitHub repository")
+
+            logger.info(f"GitHub repo cloned to Docker volume for project {self.project_id}")
+            return (True, "")
         except Exception as e:
             return (False, str(e))
 

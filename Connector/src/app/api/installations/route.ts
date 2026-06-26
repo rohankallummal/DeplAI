@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { query } from '@/lib/db';
+import { query, type Row } from '@/lib/db';
 import { requireAuth } from '@/lib/auth';
 
 export async function GET() {
@@ -7,7 +7,7 @@ export async function GET() {
     const { user, error } = await requireAuth();
     if (error) return error;
 
-    const installations = await query<any[]>(
+    const installations = await query<Row[]>(
       `SELECT
         id,
         installation_id,

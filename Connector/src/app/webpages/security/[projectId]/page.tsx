@@ -9,23 +9,25 @@ import RemediationRequest from '@/components/remediation-request';
 
 import Findings from '../findings';
 import { useScan } from '@/lib/scan-context';
+import { useBackendWatch } from '@/lib/backend-monitor-context';
 import Monitor from '../monitor';
 import SecurityPopup, { type ProjectInfo } from '@/components/security-popup';
+import type { Project } from '@/lib/types';
 
 export default function SecurityAnalysisPage() {
   const router = useRouter();
   const params = useParams();
   const projectId = params.projectId as string;
 
-  const { getScanState, startRemediation, getRemediationState, getRemediationResult, isAnyRemediating, restoreState } = useScan();
+  const { getScanState, startRemediation, getRemediationState, getRemediationResult, isAnyRemediating, restoreState, resetAll } = useScan();
   const { state: scanState, projectName: scanProjectName } = getScanState(projectId);
   const { state: remediationState } = getRemediationState(projectId);
   const remediationResult = getRemediationResult(projectId);
   const [monitorOpen, setMonitorOpen] = useState(false);
   const [remediationOpen, setRemediationOpen] = useState(false);
-  const [project, setProject] = useState<any>(null);
+  const [project, setProject] = useState<Project | null>(null);
   const [loading, setLoading] = useState(true);
-  const [activePopup, setActivePopup] = useState<'clean' | 'remediated' | 'failed' | 'published' | null>(null);
+  const [activePopup, setActivePopup] = useState<'clean' | 'remediated' | 'partially' | 'failed' | 'published' | null>(null);
   const [findingsReady, setFindingsReady] = useState(false);
   const [findingsLoaded, setFindingsLoaded] = useState(false);
   const [publishedUrl, setPublishedUrl] = useState<string | null>(null);
@@ -34,8 +36,37 @@ export default function SecurityAnalysisPage() {
   const remediating = remediationState === 'running';
   const remediationDone = remediationState === 'completed';
 
+  // The three remediation-outcome popups (success / partial / failure). Used to
+  // keep the security watch armed-but-silent while the user reads the result.
+  const resultPopupOpen =
+    activePopup === 'remediated' || activePopup === 'partially' || activePopup === 'failed';
+
+  // Watch the Security backend while a scan or remediation is in flight. If it
+  // dies, resetAll() clears all scan/remediation state (one dead backend
+  // invalidates every security operation) so reopening shows "Awaiting Scan",
+  // then route back to the Dashboard.
+  // Stay active through 'error' too: the scan/remediation WS flips state to
+  // 'error' on a dropped socket, so excluding it would tear the watch down before
+  // the health re-check can confirm a backend outage. The health check (not the
+  // phase) decides the modal — a real op error with a live backend shows no modal.
+  const { outageGate } = useBackendWatch({
+    active: ['running', 'error'].includes(scanState) || ['running', 'error'].includes(remediationState) || resultPopupOpen,
+    service: 'security',
+    // Only defer while the result popup (and its onClickCapture gate) is actually
+    // on screen. The Monitor panel hides the popup wrapper, unmounting the gate, so
+    // keep the modal un-deferred there — an outage then shows immediately instead
+    // of arming with nothing to flush it.
+    deferred: resultPopupOpen && !monitorOpen,
+    recheckSignal: scanState === 'error' || remediationState === 'error',
+    onRecover: () => {
+      resetAll();
+      router.push('/webpages');
+    },
+  });
+
   useEffect(() => {
     async function init() {
+
       await Promise.all([fetchProjectInfo(), restoreState(projectId)]);
       setLoading(false);
     }
@@ -49,6 +80,7 @@ export default function SecurityAnalysisPage() {
         setActivePopup('published');
       } catch {}
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount/projectId-keyed init; helpers are stable
   }, [projectId]);
 
   useEffect(() => {
@@ -59,12 +91,22 @@ export default function SecurityAnalysisPage() {
 
   useEffect(() => {
     if (remediationDone && remediationResult) {
-      if (remediationResult.success) {
+      // Only mark FULLY-remediated projects with the dashboard "remediated" flag.
+      // A partially-remediated project still has vulnerabilities and must stay
+      // re-scannable, so it must not get this flag (it would hide its Scan button).
+      if (remediationResult.status === 'remediated') {
         localStorage.setItem(`deplai_remediated_${projectId}`, 'true');
       }
-      setActivePopup(prev =>
-        prev === 'published' ? prev : remediationResult.success ? 'remediated' : 'failed'
-      );
+      setActivePopup(prev => {
+        if (prev === 'published') return prev;
+        switch (remediationResult.status) {
+          case 'remediated': return 'remediated';
+          case 'partially_remediated': return 'partially';
+          case 'failed': return 'failed';
+          // Defensive fallback for a malformed/legacy result missing `status`.
+          default: return remediationResult.success ? 'remediated' : 'failed';
+        }
+      });
     }
   }, [remediationDone, remediationResult, projectId]);
 
@@ -75,13 +117,14 @@ export default function SecurityAnalysisPage() {
     const fullName = `${project.owner}/${project.repo}`;
     try {
       const created = JSON.parse(localStorage.getItem('deplai_created_repos') || '[]');
-      const match = created.find((r: any) => r.fullName === fullName);
+      const match = created.find((r: { fullName: string; url: string }) => r.fullName === fullName);
       if (match) {
         setPublishedUrl(match.url);
         setCreatedFromLocal(true);
         setActivePopup('published');
       }
     } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs when `project` resolves; other reads are one-shot
   }, [project]);
 
   async function fetchProjectInfo() {
@@ -138,10 +181,11 @@ export default function SecurityAnalysisPage() {
     router.push('/webpages');
   }
 
-  const popupScenario = useMemo((): 'clean' | 'failed' | 'published' | 'local_remediated' | 'github_remediated' | null => {
+  const popupScenario = useMemo((): 'clean' | 'failed' | 'published' | 'local_remediated' | 'github_remediated' | 'partially_remediated' | null => {
     if (activePopup === 'clean') return 'clean';
     if (activePopup === 'failed') return 'failed';
     if (activePopup === 'published') return 'published';
+    if (activePopup === 'partially') return 'partially_remediated';
     if (activePopup === 'remediated') {
       return project?.type === 'local' ? 'local_remediated' : 'github_remediated';
     }
@@ -161,6 +205,7 @@ export default function SecurityAnalysisPage() {
   const hideFindings =
     popupScenario === 'local_remediated' ||
     popupScenario === 'github_remediated' ||
+    popupScenario === 'partially_remediated' ||
     popupScenario === 'published';
 
   usePageLoading(loading || (!findingsLoaded && !hideFindings));
@@ -213,7 +258,10 @@ export default function SecurityAnalysisPage() {
         )}
 
         {popupActive && !monitorOpen && popupScenario && (
-          <div className="absolute inset-0 z-40 flex items-center justify-center">
+          <div
+            className="absolute inset-0 z-40 flex items-center justify-center"
+            onClickCapture={outageGate}
+          >
             <div className="absolute inset-0 bg-black/30" />
             <SecurityPopup
               scenario={popupScenario}

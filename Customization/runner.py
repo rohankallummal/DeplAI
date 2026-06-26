@@ -81,6 +81,25 @@ class CustomizationRunner(RunnerBase):
             return None
         return decode_output(out).strip() or None
 
+    def _git_working_tree_dirty(self) -> bool:
+        """For GitHub projects, whether the Styler left any uncommitted change in
+        the cloned working tree (modified, new, or deleted files). This is the
+        GitHub counterpart to _extract_changes for local projects: it reflects the
+        tree state, so Write / rm / mv count the same as Edits, and it drives the
+        session change state that gates the builder and the Save / exit-unsaved
+        warning. A git failure is treated as "no change" rather than guessing."""
+        ec, out = self._container.exec_run(
+            ["sh", "-c", f"git -C {self._project_dir} -c safe.directory='*' status --porcelain 2>/dev/null"],
+            user="agent",
+        )
+        if ec != 0:
+            # Can't read the tree state. Assume there ARE changes so the builder
+            # still runs and the exit-unsaved warning shows, rather than silently
+            # dropping the user's edits on a git hiccup.
+            logger.warning("git status failed for %s (exit %s); assuming the tree is dirty", self.project_id, ec)
+            return True
+        return bool(decode_output(out).strip())
+
     def cancel(self):
         super().cancel()
         # Wake any parked waits so the workflow loop observes cancellation and
@@ -245,8 +264,16 @@ class CustomizationRunner(RunnerBase):
                 # approval flag. Derive the change state from what extraction
                 # promoted or deleted, not from per-edit decisions.
                 iteration_changed = False
-                if self.context.project_type == "local" and not self._cancelled:
-                    if await self._extract_changes():
+                if not self._cancelled:
+                    if self.context.project_type == "local":
+                        if await self._extract_changes():
+                            iteration_changed = True
+                            self._changes_made = True
+                    # GitHub: the clone is a git working tree, so detect the
+                    # Styler's changes via git rather than the edited/ snapshot.
+                    # Without this the builder never runs and changes_made stays
+                    # false (so the exit-unsaved warning never shows) for GitHub.
+                    elif await asyncio.to_thread(self._git_working_tree_dirty):
                         iteration_changed = True
                         self._changes_made = True
 
@@ -739,6 +766,17 @@ class CustomizationRunner(RunnerBase):
                 command=["-c", clone_script],
                 volumes={CUSTOMIZE_CODE_VOLUME: {"bind": "/repo", "mode": "rw"}},
                 tmpfs={"/git": ""},
+                # This container runs as root, but the target dir under the shared
+                # volume is pre-created and chowned to agent(1000) by the main
+                # container, so git's CVE-2022-24765 check rejects it ("dubious
+                # ownership"). Trust all dirs via GIT_CONFIG env so the clone +
+                # checkout chain runs regardless of owner — mirrors the
+                # safe.directory='*' used for in-container git elsewhere.
+                environment={
+                    "GIT_CONFIG_COUNT": "1",
+                    "GIT_CONFIG_KEY_0": "safe.directory",
+                    "GIT_CONFIG_VALUE_0": "*",
+                },
                 detach=True,
             )
             try:

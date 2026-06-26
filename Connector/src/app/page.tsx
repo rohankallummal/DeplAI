@@ -36,6 +36,7 @@ export default function Home() {
   }, [router]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- mount-only auth check; state updates land after the awaited fetch, not synchronously
     checkAuth();
 
     const handleVisibility = () => {

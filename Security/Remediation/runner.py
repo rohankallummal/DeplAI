@@ -30,6 +30,13 @@ def reset_last_project() -> None:
     _last_project_id = None
 
 
+def get_last_project() -> str | None:
+    # The project whose artifacts currently occupy the shared agent volume. Used to
+    # refuse report requests for any other project (the volume holds one project's
+    # cycles at a time — it's cleared on project switch).
+    return _last_project_id
+
+
 class RemediationRunner(RunnerBase):
 
     def __init__(self, websocket: WebSocket, project_id: str, context: ScanContext):

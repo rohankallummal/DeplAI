@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/auth';
-import { query } from '@/lib/db';
+import { query, type Row } from '@/lib/db';
 import { SECURITY_URL, securityHeaders, logSecurityError, isConnectionRefused, securityUnavailableResponse } from '@/lib/security';
 
 export async function POST(request: NextRequest) {
@@ -17,7 +17,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const [repoRow] = await query<any[]>(
+    const [repoRow] = await query<Row[]>(
       'SELECT default_branch FROM github_repositories WHERE full_name = ?',
       [`${owner}/${repo}`]
     );
@@ -55,7 +55,7 @@ export async function POST(request: NextRequest) {
     }
 
     return NextResponse.json(data);
-  } catch (error: any) {
+  } catch (error) {
     logSecurityError('Publish create-pr', error);
     if (isConnectionRefused(error)) return securityUnavailableResponse();
     return NextResponse.json(

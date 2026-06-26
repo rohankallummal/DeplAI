@@ -108,7 +108,7 @@ const STATUS_MAP: Record<string, DeployPhase> = {
   error: 'error',
 };
 
-const ACTIVE_PHASES: DeployPhase[] = ['analyzing', 'clarifying', 'terraforming', 'costing', 'deploying'];
+export const ACTIVE_PHASES: DeployPhase[] = ['analyzing', 'clarifying', 'terraforming', 'costing', 'deploying'];
 
 export function DeployProvider({ children }: { children: React.ReactNode }) {
   const [states, setStates] = useState<Record<string, ProjectDeployState>>({});
@@ -236,6 +236,7 @@ export function DeployProvider({ children }: { children: React.ReactNode }) {
     }));
 
     await connectDeployWsWithToken(projectId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- connectDeployWsWithToken is stable; this starter is created once
   }, []);
 
   const sendAnswer = useCallback((projectId: string, questionId: string, answer: string) => {
@@ -361,6 +362,7 @@ export function DeployProvider({ children }: { children: React.ReactNode }) {
         await connectDeployWsWithToken(projectId);
       }
     } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- connectDeployWsWithToken is stable; effect keys off `states`
   }, [states]);
 
   const value = useMemo<DeployContextValue>(() => ({

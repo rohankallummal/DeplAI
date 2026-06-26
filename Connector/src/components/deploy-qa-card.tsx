@@ -76,6 +76,7 @@ export default function DeployQACard({
     }
 
     return () => timersRef.current.forEach(clearTimeout);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-run only when allAnswered flips; dismissPhase intentionally excluded
   }, [allAnswered]);
 
   const handleOptionClick = (option: string) => {

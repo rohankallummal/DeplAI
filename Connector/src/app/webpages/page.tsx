@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
+import Image from 'next/image';
 import { ExitIcon } from '@/components/log-in-out';
 import ThemeToggle from '@/components/theme-toggle';
 import Projects from './dashboard/dashboard';
@@ -9,16 +10,18 @@ import { usePopup } from '@/components/toast-notification';
 import { useScan } from '@/lib/scan-context';
 import { useDeploy } from '@/lib/deploy-context';
 import { usePageLoading } from '@/lib/page-loading-context';
+import type { SessionData } from '@/lib/session';
+import type { Project } from '@/lib/types';
 
 export default function Dashboard() {
   const router = useRouter();
   const { showPopup } = usePopup();
   const { startScan, activeScanIds, resetAll, activeRemediationIds } = useScan();
   const { activeDeployIds, activeDeployProjectNames } = useDeploy();
-  const [user, setUser] = useState<any>(null);
+  const [user, setUser] = useState<SessionData['user'] | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
-  const [installations, setInstallations] = useState<any[]>([]);
-  const [projects, setProjects] = useState<any[]>([]);
+  const [installations, setInstallations] = useState<unknown[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -36,6 +39,7 @@ export default function Dashboard() {
         showPopup({ type: data.type || 'success', message: data.message });
       } catch {}
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount; checkAuth/showPopup are stable
   }, []);
 
   async function checkAuth() {
@@ -155,7 +159,7 @@ export default function Dashboard() {
     }
   }
 
-  function handleProjectClick(project: any) {
+  function handleProjectClick(project: Project) {
     if (project.type === 'local') {
       router.push(`/webpages/codeview?project_id=${project.id}&type=local`);
     } else {
@@ -189,9 +193,11 @@ export default function Dashboard() {
                   rel="noopener noreferrer"
                   title={user.login}
                 >
-                  <img
+                  <Image
                     src={user.avatarUrl}
                     alt={user.login || 'User'}
+                    width={36}
+                    height={36}
                     className="w-9 h-9 rounded-full hover:ring-2 hover:ring-blue-400 transition"
                   />
                 </a>

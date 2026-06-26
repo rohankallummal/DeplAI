@@ -6,6 +6,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     git \
     curl \
+    libpango-1.0-0 \
+    libpangoft2-1.0-0 \
+    libharfbuzz0b \
+    libcairo2 \
+    fontconfig \
+    shared-mime-info \
+    fonts-noto \
     && rm -rf /var/lib/apt/lists/*
 
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \

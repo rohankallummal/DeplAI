@@ -14,6 +14,14 @@ export function isConnectionRefused(error: unknown): boolean {
   return cause?.code === 'ECONNREFUSED';
 }
 
+// Extract a human-readable message from an unknown thrown value. Returns the
+// Error's message when it's an Error, otherwise `fallback` (or the stringified
+// value when no fallback is given).
+export function getErrorMessage(error: unknown, fallback?: string): string {
+  if (error instanceof Error) return error.message;
+  return fallback ?? String(error);
+}
+
 export function logBackendError(label: string, url: string, error: unknown): void {
   if (isConnectionRefused(error)) {
     console.error(`[${label}] Backend unreachable at ${url} — ensure the service is running.`);

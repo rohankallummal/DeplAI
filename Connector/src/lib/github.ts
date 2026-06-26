@@ -1,6 +1,7 @@
 import { Octokit } from '@octokit/rest';
 import { createAppAuth } from '@octokit/auth-app';
-import { query } from './db';
+import { query, type Row } from './db';
+import { getErrorMessage } from './backend';
 import { v4 as uuidv4 } from 'uuid';
 import simpleGit from 'simple-git';
 import fs from 'fs';
@@ -58,7 +59,7 @@ export class GitHubService {
       return cached.token;
     }
 
-    const installations = await query<any[]>(
+    const installations = await query<Row[]>(
       'SELECT installation_id FROM github_installations WHERE id = ?',
       [installationId]
     );
@@ -72,8 +73,8 @@ export class GitHubService {
       ({ data } = await this.app.apps.createInstallationAccessToken({
         installation_id: installations[0].installation_id,
       }));
-    } catch (err: any) {
-      if (err.status === 403) {
+    } catch (err) {
+      if ((err as { status?: number }).status === 403) {
         await query(
           `UPDATE github_installations SET suspended_at = NOW() WHERE id = ?`,
           [installationId]
@@ -201,7 +202,7 @@ export class GitHubService {
       state: 'open',
       per_page: 100,
     });
-    return (pulls as any[]).map(pr => ({
+    return pulls.map(pr => ({
       number: pr.number,
       headRef: pr.head?.ref || '',
       baseRef: pr.base?.ref || '',
@@ -278,7 +279,7 @@ export class GitHubService {
   }
 
   private async getEffectiveBranch(installationId: string, owner: string, repo: string): Promise<string> {
-    const [repoData] = await query<any[]>(
+    const [repoData] = await query<Row[]>(
       `SELECT default_branch FROM github_repositories WHERE full_name = ?`,
       [`${owner}/${repo}`]
     );
@@ -343,7 +344,7 @@ export class GitHubService {
   ): Promise<string> {
     const branchDir = this.branchPath(owner, repo, branch);
 
-    const [repoData] = await query<any[]>(
+    const [repoData] = await query<Row[]>(
       `SELECT needs_refresh FROM github_repositories WHERE full_name = ?`,
       [`${owner}/${repo}`]
     );
@@ -378,7 +379,7 @@ export class GitHubService {
     repo: string,
     dirPath: string = '',
     branch?: string
-  ): Promise<any[]> {
+  ): Promise<{ name: string; path: string; type: string; size: number | null }[]> {
     const effectiveBranch = branch || await this.getEffectiveBranch(installationId, owner, repo);
     const repoPath = await this.ensureBranchFresh(installationId, owner, repo, effectiveBranch);
     const fullPath = path.join(repoPath, dirPath);
@@ -434,7 +435,7 @@ export class GitHubService {
   }
 
   async syncInstallations(userId: string): Promise<{ removed: number; added: number }> {
-    const installations = await query<any[]>(
+    const installations = await query<Row[]>(
       `SELECT id, installation_id, account_login
        FROM github_installations
        WHERE user_id = ?`,
@@ -448,7 +449,7 @@ export class GitHubService {
       const alive = await this.isInstallationAlive(inst.installation_id);
 
       if (!alive) {
-        const deleted = await query<any>(
+        const deleted = await query<{ affectedRows?: number }>(
           'DELETE FROM github_repositories WHERE installation_id = ?',
           [inst.id]
         );
@@ -475,11 +476,12 @@ export class GitHubService {
     try {
       await this.app.apps.getInstallation({ installation_id: githubInstallationId });
       return true;
-    } catch (err: any) {
-      if (err.status === 404 || err.status === 403) {
+    } catch (err) {
+      const status = (err as { status?: number }).status;
+      if (status === 404 || status === 403) {
         return false;
       }
-      console.error(`Sync: unexpected error checking installation ${githubInstallationId}:`, err.message);
+      console.error(`Sync: unexpected error checking installation ${githubInstallationId}:`, getErrorMessage(err));
       return true;
     }
   }
@@ -502,24 +504,24 @@ export class GitHubService {
         octokit.apps.listReposAccessibleToInstallation,
         { per_page: 100 },
       );
-      liveRepos = (pages as any[]).map((r: any) => ({
+      liveRepos = pages.map((r) => ({
         id: r.id,
         full_name: r.full_name,
         private: r.private,
         default_branch: r.default_branch || 'main',
       }));
-    } catch (err: any) {
-      console.error(`Sync: failed to list repos for installation ${internalId}:`, err.message);
+    } catch (err) {
+      console.error(`Sync: failed to list repos for installation ${internalId}:`, getErrorMessage(err));
       return { removed: 0, added: 0 };
     }
 
     const liveRepoIds = new Set(liveRepos.map(r => r.id));
 
-    const dbRepos = await query<any[]>(
+    const dbRepos = await query<Row[]>(
       'SELECT id, github_repo_id FROM github_repositories WHERE installation_id = ?',
       [internalId]
     );
-    const dbRepoIds = new Set(dbRepos.map((r: any) => r.github_repo_id));
+    const dbRepoIds = new Set(dbRepos.map((r) => r.github_repo_id));
 
     let removed = 0;
     for (const dbRepo of dbRepos) {

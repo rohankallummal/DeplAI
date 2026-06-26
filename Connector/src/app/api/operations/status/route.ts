@@ -25,7 +25,7 @@ export async function GET(request: NextRequest) {
 
     const data = await response.json();
     return NextResponse.json(data);
-  } catch (error: any) {
+  } catch (error) {
     logSecurityError('Operation status', error);
     return NextResponse.json({ scan: null, remediation: null, remediation_status: null });
   }

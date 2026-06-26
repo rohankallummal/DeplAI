@@ -31,6 +31,7 @@ interface ProjectScanState {
 
 export interface RemediationResult {
   success: boolean;
+  status: 'remediated' | 'partially_remediated' | 'failed';
   message: string;
   cycles_run: number;
 }
@@ -157,6 +158,7 @@ export function ScanProvider({ children }: { children: React.ReactNode }) {
       ...prev,
       [projectId]: { ...prev[projectId], result },
     }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `remediation` helpers are stable; setter created once
   }, []);
   const [resultsCache, setResultsCache] = useState<Record<string, CachedScanResults>>({});
 
@@ -175,6 +177,7 @@ export function ScanProvider({ children }: { children: React.ReactNode }) {
     });
 
     const wsToken = await fetchWsToken('scan');
+
     scan.wsRefs.current[projectId] = connectWebSocket(
       '/ws/scan', projectId,
       scan.appendMessage,
@@ -183,6 +186,7 @@ export function ScanProvider({ children }: { children: React.ReactNode }) {
       (id) => { delete scan.wsRefs.current[id]; },
       wsToken,
     );
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- scan op helpers are stable
   }, [scan.appendMessage, scan.updateStatus]);
 
   const startRemediation = useCallback(async (projectId: string) => {
@@ -209,6 +213,7 @@ export function ScanProvider({ children }: { children: React.ReactNode }) {
     }
 
     const wsToken = await fetchWsToken('scan');
+
     remediation.wsRefs.current[projectId] = connectWebSocket(
       '/ws/remediate', projectId,
       remediation.appendMessage,
@@ -218,6 +223,7 @@ export function ScanProvider({ children }: { children: React.ReactNode }) {
       wsToken,
       setRemediationResult,
     );
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- remediation op helpers + setRemediationResult are stable
   }, [remediation.appendMessage, remediation.updateStatus, setRemediationResult]);
 
   const getRemediationResult = useCallback((projectId: string): RemediationResult | null => {
@@ -268,22 +274,28 @@ export function ScanProvider({ children }: { children: React.ReactNode }) {
           state: 'running', messages: [], projectName: scan.states[projectId]?.projectName || '',
         } as ProjectScanState);
       } else if (data.remediation?.active) {
+
         await reconnect(remediation, '/ws/remediate', {
           state: 'running', messages: [], result: null,
+
         } as ProjectRemediationState, setRemediationResult);
       }
     } catch {
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- op helpers + setRemediationResult are stable; effect reads current states
   }, [scan.states, remediation.states, scan.appendMessage, scan.updateStatus, remediation.appendMessage, remediation.updateStatus, setRemediationResult]);
 
   const resetAll = useCallback(() => {
     Object.values(scan.wsRefs.current).forEach(ws => ws.close());
     Object.values(remediation.wsRefs.current).forEach(ws => ws.close());
+
     scan.wsRefs.current = {};
+
     remediation.wsRefs.current = {};
     scan.setStates({});
     remediation.setStates({});
     setResultsCache({});
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- scan/remediation helpers are stable; resetAll created once
   }, []);
 
   const value = useMemo<ScanContextValue>(() => ({

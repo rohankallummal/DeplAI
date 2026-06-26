@@ -106,7 +106,13 @@ async def websocket_preview(websocket: WebSocket, project_id: str, token: str = 
     try:
         while True:
             raw = await websocket.receive_text()
-            cmd = PreviewWebSocketCommand.model_validate_json(raw)
+            try:
+                cmd = PreviewWebSocketCommand.model_validate_json(raw)
+            except Exception:
+                # Ignore malformed/legacy frames (e.g. a stale {"action":"stop"})
+                # rather than tearing down the session via the broad handler below
+                # (which would skip detach() and orphan the runner).
+                continue
 
             if cmd.action == "start":
                 await _stop_all_previews()
@@ -127,12 +133,6 @@ async def websocket_preview(websocket: WebSocket, project_id: str, token: str = 
                         logger.error("Preview workflow failed for %s: %s", pid, e, exc_info=True)
 
                 asyncio.create_task(run_preview_workflow(runner, project_id))
-
-            elif cmd.action == "stop":
-                runner = local_runner or active_previews.pop(project_id, None)
-                if runner:
-                    await runner.stop()
-                    active_previews.pop(project_id, None)
 
     except (WebSocketDisconnect, RuntimeError):
         logger.info("Preview WebSocket disconnected for project %s", project_id)

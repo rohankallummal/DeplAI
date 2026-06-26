@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getErrorMessage } from '@/lib/backend';
 import { githubService } from '@/lib/github';
 import { requireAuth, verifyRepositoryOwnership } from '@/lib/auth';
-import { query } from '@/lib/db';
+import { query, type Row } from '@/lib/db';
 
 // Backs the branch-aware customization popup in one GitHub round trip: the
 // customizable base branches (Step 1) plus this project's open DeplAI
@@ -34,7 +35,7 @@ export async function GET(request: NextRequest) {
 
     // Bind the client-supplied project_id to this repo: for GitHub projects
     // project_id is the github_repositories row id, which must map to owner/repo.
-    const [row] = await query<any[]>(
+    const [row] = await query<Row[]>(
       'SELECT 1 AS ok FROM github_repositories WHERE id = ? AND full_name = ?',
       [projectId, `${owner}/${repo}`],
     );
@@ -50,10 +51,10 @@ export async function GET(request: NextRequest) {
     );
 
     return NextResponse.json({ defaultBranch, branches, pulls });
-  } catch (error: any) {
+  } catch (error) {
     console.error('Error fetching customize options:', error);
     return NextResponse.json(
-      { error: error.message || 'Failed to fetch branches' },
+      { error: getErrorMessage(error, 'Failed to fetch branches') },
       { status: 500 },
     );
   }

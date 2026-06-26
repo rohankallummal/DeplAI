@@ -15,11 +15,7 @@ async def run(
     project_name: str,
     project_id: str,
 ) -> bool:
-    tools = [
-        "Read", "Write", "Edit",
-        "Bash", "Glob", "Grep", "Agent",
-        "mcp__firecrawl",
-    ]
+    tools = ["Read", "Write", "Edit", "Bash", "Glob", "Grep", "Agent", "mcp__firecrawl"]
 
     system_prompt = (
         SYSTEM_PROMPT_TEMPLATE

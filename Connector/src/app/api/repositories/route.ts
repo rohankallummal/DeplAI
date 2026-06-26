@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { query } from '@/lib/db';
+import { query, type Row } from '@/lib/db';
 import { requireAuth, verifyInstallationOwnership } from '@/lib/auth';
 
 export async function GET(request: NextRequest) {
@@ -25,7 +25,7 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const repositories = await query<any[]>(
+    const repositories = await query<Row[]>(
       `SELECT 
         id,
         github_repo_id,

@@ -47,7 +47,7 @@ export async function POST(request: NextRequest) {
     }
 
     return NextResponse.json(data);
-  } catch (error: any) {
+  } catch (error) {
     logSecurityError('Publish create-repo', error);
     if (isConnectionRefused(error)) return securityUnavailableResponse();
     return NextResponse.json(

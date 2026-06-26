@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import LoadingSpinner from '@/components/loading-spinner';
+import { getErrorMessage } from '@/lib/backend';
 
 export interface DeplaiPr {
   number: number;
@@ -148,7 +149,7 @@ export default function BranchSelectModal({ owner, repo, projectId, defaultBranc
         setAllPulls(data.pulls || []);
         // No auto-selection — the user must explicitly choose a branch before proceeding.
       } catch (err) {
-        if (!cancelled) setBranchesError(err instanceof Error ? err.message : 'Failed to load branches');
+        if (!cancelled) setBranchesError(getErrorMessage(err, 'Failed to load branches'));
       } finally {
         if (!cancelled) setBranchesLoading(false);
       }

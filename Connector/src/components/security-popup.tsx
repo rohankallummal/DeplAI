@@ -3,9 +3,10 @@
 import { useState, useEffect, useRef } from 'react';
 import Lottie from 'lottie-react';
 import tickAnimation from '@/components/animation/tick.json';
+import alertAnimation from '@/components/animation/alert.json';
 import type { RemediationResult } from '@/lib/scan-context';
 
-type PopupScenario = 'clean' | 'github_remediated' | 'local_remediated' | 'failed' | 'published';
+type PopupScenario = 'clean' | 'github_remediated' | 'local_remediated' | 'failed' | 'published' | 'partially_remediated';
 
 export interface ProjectInfo {
   id: string;
@@ -118,6 +119,8 @@ interface PublishStepConfig {
   errorLabel: string;
   icon: React.ReactNode;
   buttonLabel: string;
+  title?: string;
+  extra?: React.ReactNode;
 }
 
 function openAuthPopup() {
@@ -193,19 +196,21 @@ function PublishStep({ config, onComplete }: { config: PublishStepConfig; onComp
   return (
     <div className="flex flex-col items-center text-center">
       <h2 className="text-2xl font-bold text-foreground mb-3">
-        Issues in the codebase are resolved
+        {config.title ?? 'Issues in the codebase are resolved'}
       </h2>
       <p className="text-muted text-base mb-10">{config.description}</p>
       {error && <p className="text-red-500 text-sm mb-4">{error}</p>}
       <IconButton onClick={doPublish} disabled={loading} label={config.buttonLabel}>
         {loading ? <Spinner /> : config.icon}
       </IconButton>
+      {config.extra}
     </div>
   );
 }
 
-function RemediatedContent({ project, onPublishComplete, isGitHub }: { project: ProjectInfo | null; onPublishComplete: (url: string) => void; isGitHub: boolean }) {
-  const config: PublishStepConfig | null = project ? (isGitHub ? {
+function buildPublishConfig(project: ProjectInfo | null, isGitHub: boolean): PublishStepConfig | null {
+  if (!project) return null;
+  return isGitHub ? {
     endpoint: '/api/publish/create-pr',
     body: { project_id: project.id, owner: project.owner, repo: project.repo },
     description: 'Update the changes to GitHub',
@@ -219,10 +224,69 @@ function RemediatedContent({ project, onPublishComplete, isGitHub }: { project: 
     errorLabel: 'Failed to create repository',
     icon: <GitHubIcon />,
     buttonLabel: 'Create GitHub Repository',
-  }) : null;
+  };
+}
 
+function RemediatedContent({ project, onPublishComplete, isGitHub }: { project: ProjectInfo | null; onPublishComplete: (url: string) => void; isGitHub: boolean }) {
+  const config = buildPublishConfig(project, isGitHub);
   if (!config) return null;
+  return <PublishStep config={config} onComplete={onPublishComplete} />;
+}
 
+async function downloadReportPdf(projectId: string): Promise<void> {
+  const res = await fetch(`/api/security/report-pdf/${projectId}`);
+  if (!res.ok) {
+    throw new Error(`Failed to generate report (${res.status})`);
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'vulnerability-report.pdf';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function DownloadReportLink({ projectId }: { projectId: string }) {
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handle = async () => {
+    if (loading) return;
+    setLoading(true);
+    setError(null);
+    try {
+      await downloadReportPdf(projectId);
+    } catch {
+      setError('Failed to generate report. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="mt-8 text-center">
+      <p className="text-muted text-sm mb-1">Download Remaining Vulnerabilities Report</p>
+      <button
+        onClick={handle}
+        disabled={loading}
+        className="text-blue-600 dark:text-blue-400 hover:underline font-medium text-sm disabled:opacity-50 cursor-pointer"
+      >
+        {loading ? 'Generating…' : 'Click here'}
+      </button>
+      {error && <p className="text-red-500 text-xs mt-2">{error}</p>}
+    </div>
+  );
+}
+
+function PartiallyRemediatedContent({ project, onPublishComplete, isGitHub }: { project: ProjectInfo | null; onPublishComplete: (url: string) => void; isGitHub: boolean }) {
+  const base = buildPublishConfig(project, isGitHub);
+  if (!base || !project) return null;
+  const config: PublishStepConfig = {
+    ...base,
+    title: 'Remediation completed with remaining vulnerabilities',
+    extra: <DownloadReportLink projectId={project.id} />,
+  };
   return <PublishStep config={config} onComplete={onPublishComplete} />;
 }
 
@@ -254,13 +318,11 @@ function PublishedContent({ publishedUrl, isGitHub, createdFromLocal }: { publis
   );
 }
 
-function FailedContent({ onClose, remediationResult }: { onClose: () => void; remediationResult?: RemediationResult | null }) {
+function FailedContent({ onClose, remediationResult, project }: { onClose: () => void; remediationResult?: RemediationResult | null; project: ProjectInfo | null }) {
   return (
     <div className="flex flex-col items-center text-center pt-4">
-      <div className="w-16 h-16 mb-6 rounded-full bg-red-500/10 flex items-center justify-center">
-        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <path d="M12 9V13M12 17H12.01M12 3L2 21H22L12 3Z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-red-500" />
-        </svg>
+      <div className="w-28 h-28 mb-4">
+        <Lottie animationData={alertAnimation} loop />
       </div>
       <h2 className="text-xl font-bold text-foreground mb-3">
         The vulnerabilities could not be resolved
@@ -276,6 +338,9 @@ function FailedContent({ onClose, remediationResult }: { onClose: () => void; re
         </p>
       ) : <div className="mb-8" />}
       <ActionButton onClick={onClose}>Close</ActionButton>
+      {remediationResult?.cycles_run && project ? (
+        <DownloadReportLink projectId={project.id} />
+      ) : null}
     </div>
   );
 }
@@ -284,7 +349,7 @@ export default function SecurityPopup({ scenario, projectName, project, onClose,
   return (
     <div className="relative w-full max-w-[680px] mx-4 rounded-2xl shadow-2xl overflow-hidden bg-surface border border-border">
       <div className="px-10 py-12">
-        {(scenario === 'failed' || scenario === 'published') && <CloseButton onClick={onClose} />}
+        {(scenario === 'failed' || scenario === 'published' || scenario === 'partially_remediated') && <CloseButton onClick={onClose} />}
 
         {scenario === 'clean' && (
           <CleanContent projectName={projectName} onClose={onClose} />
@@ -296,6 +361,13 @@ export default function SecurityPopup({ scenario, projectName, project, onClose,
             isGitHub={scenario === 'github_remediated'}
           />
         )}
+        {scenario === 'partially_remediated' && onPublishComplete && (
+          <PartiallyRemediatedContent
+            project={project}
+            onPublishComplete={onPublishComplete}
+            isGitHub={project?.type !== 'local'}
+          />
+        )}
         {scenario === 'published' && publishedUrl != null && (
           <PublishedContent
             publishedUrl={publishedUrl}
@@ -304,7 +376,7 @@ export default function SecurityPopup({ scenario, projectName, project, onClose,
           />
         )}
         {scenario === 'failed' && (
-          <FailedContent onClose={onClose} remediationResult={remediationResult} />
+          <FailedContent onClose={onClose} remediationResult={remediationResult} project={project} />
         )}
       </div>
     </div>

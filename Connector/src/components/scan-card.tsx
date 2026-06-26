@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import LoadingSpinner from '@/components/loading-spinner';
 import { usePopup } from '@/components/toast-notification';
+import { getErrorMessage } from '@/lib/backend';
 import { FiShield } from 'react-icons/fi';
 
 interface ScanModalProps {
@@ -62,11 +63,11 @@ export default function ScanModal({ isOpen, onClose, project, onScanComplete }: 
 
       await response.json();
       onScanComplete({ projectId: project.id, projectName: name });
-    } catch (error: any) {
+    } catch (error) {
       console.error('Failed to initiate scan:', error);
       showPopup({
         type: 'error',
-        message: error?.message || 'Failed to connect to the backend. Please ensure the server is running.',
+        message: getErrorMessage(error, 'Failed to connect to the backend. Please ensure the server is running.'),
       });
     } finally {
       handleClose();

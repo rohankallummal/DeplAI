@@ -60,7 +60,7 @@ class Orchestrator:
         scan_data = self._load_initial_scan_data()
         if scan_data is None:
             await self.on_message("error", "No scan reports found. Run a scan first.")
-            return {"success": False, "message": "No scan reports found", "cycles_run": 0}
+            return {"status": "failed", "success": False, "message": "No scan reports found", "cycles_run": 0}
 
         self._write_json("scan_data.json", scan_data)
         await self.on_message("success", "Scan reports loaded")
@@ -68,7 +68,7 @@ class Orchestrator:
         await self.on_message("phase", "Building codebase context")
         if not await context_builder.run(CODEBASE_PATH, WORKSPACE_PATH):
             await self.on_message("error", "Context builder failed")
-            return {"success": False, "message": "Context builder failed", "cycles_run": 0}
+            return {"status": "failed", "success": False, "message": "Context builder failed", "cycles_run": 0}
         await self.on_message("success", "Codebase context ready")
 
         await self.on_message("phase", "Remediating codebase")
@@ -79,21 +79,29 @@ class Orchestrator:
             project_id=self.project_id,
         ):
             await self.on_message("error", "Executor failed")
-            return {"success": False, "message": "Executor failed", "cycles_run": 0}
+            return {"status": "failed", "success": False, "message": "Executor failed", "cycles_run": 0}
         await self.on_message("success", "Executor complete")
 
-        final_cycle, final_scan_data = self._read_latest_cycle_scan_data()
+        final_cycle, final_scan_data, bearer_present, grype_present = self._read_latest_cycle_scan_data()
         total_remaining = len(self._extract_vuln_ids(final_scan_data))
         cycles_run = max(final_cycle, 1)
+        status = self._classify(final_scan_data, bearer_present, grype_present)
 
-        if total_remaining == 0:
+        if status == "remediated":
             msg = f"All vulnerabilities resolved after {cycles_run} cycle(s)"
             await self.on_message("success", msg)
-            return {"success": True, "message": "All vulnerabilities resolved", "cycles_run": cycles_run}
+            return {"status": status, "success": True,
+                    "message": "All vulnerabilities resolved", "cycles_run": cycles_run}
+
+        if status == "partially_remediated":
+            msg = f"Remediation completed with {total_remaining} remaining supply-chain vulnerability(ies) after {cycles_run} cycle(s)"
+            await self.on_message("warning", msg)
+            return {"status": status, "success": True,
+                    "message": "Remediation completed with remaining vulnerabilities", "cycles_run": cycles_run}
 
         msg = f"{total_remaining} vulnerabilities remain after {cycles_run} cycle(s)"
         await self.on_message("warning", msg)
-        return {"success": False, "message": msg, "cycles_run": cycles_run}
+        return {"status": "failed", "success": False, "message": msg, "cycles_run": cycles_run}
 
     def _prepare_workspace(self):
         for subdir in ("", "security", "Knowledge-Store"):
@@ -125,11 +133,26 @@ class Orchestrator:
                 ids.add(group["cwe_id"])
         return ids
 
-    def _read_latest_cycle_scan_data(self) -> tuple[int, dict]:
+    @staticmethod
+    def _classify(scan_data: dict, bearer_present: bool, grype_present: bool) -> str:
+        # The success signal hinges on the final-cycle code scan. If that output is
+        # missing (scanner crashed, or no cycle ran) we cannot assert the code
+        # vulnerabilities were fixed — report failed rather than a false all-clear.
+        if not bearer_present:
+            return "failed"
+        remaining_supply = sum(1 for x in scan_data.get("supply_chain", []) if x.get("cve_id"))
+        remaining_code = sum(1 for g in scan_data.get("code_security", []) if g.get("cwe_id"))
+        if remaining_supply == 0 and remaining_code == 0 and grype_present:
+            return "remediated"
+        if remaining_code == 0:
+            return "partially_remediated"
+        return "failed"
+
+    def _read_latest_cycle_scan_data(self) -> tuple[int, dict, bool, bool]:
         security_dir = os.path.join(WORKSPACE_PATH, "security")
         empty: dict = {"supply_chain": [], "code_security": []}
         if not os.path.isdir(security_dir):
-            return (0, empty)
+            return (0, empty, False, False)
 
         cycle_nums = [
             int(m.group(1))
@@ -137,10 +160,12 @@ class Orchestrator:
             if (m := re.fullmatch(r"cycle(\d+)", name))
         ]
         if not cycle_nums:
-            return (0, empty)
+            return (0, empty, False, False)
 
         latest = max(cycle_nums)
         cycle_dir = os.path.join(security_dir, f"cycle{latest}")
         bearer_raw = _read_file(os.path.join(cycle_dir, "bearer.json"))
         grype_raw = _read_file(os.path.join(cycle_dir, "grype.json"))
-        return (latest, _parse_reports(bearer_raw, grype_raw))
+        # Report presence so _classify can distinguish "scanner found nothing" from
+        # "scanner output missing" (a crashed/absent scan must not read as clean).
+        return (latest, _parse_reports(bearer_raw, grype_raw), bearer_raw is not None, grype_raw is not None)

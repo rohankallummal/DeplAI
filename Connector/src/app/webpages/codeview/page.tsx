@@ -16,6 +16,8 @@ import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { usePopup } from '@/components/toast-notification';
 import { useCustomize } from '@/lib/customize-context';
 import { usePreview } from '@/lib/preview-context';
+import { useBackendWatch } from '@/lib/backend-monitor-context';
+import { getErrorMessage } from '@/lib/backend';
 
 interface FileItem {
   name: string;
@@ -61,7 +63,7 @@ function RepositoryBrowserContent() {
 
   const { showPopup } = usePopup();
   const { startCustomize, getCustomizeState, resetCustomize, closeCustomize } = useCustomize();
-  const { startPreview, stopPreview } = usePreview();
+  const { startPreview, stopPreview, getPreviewState } = usePreview();
   const [authLoading, setAuthLoading] = useState(true);
   const [pageReady, setPageReady] = useState(false);
   const [projectName, setProjectName] = useState('');
@@ -112,13 +114,59 @@ function RepositoryBrowserContent() {
     if (previewOpenRef.current) stopPreview(projectId);
   }, [projectId, stopPreview]);
 
+  // Customization chat and Live Preview both run on the Customize backend (8002).
+  // Watch it while either operation is in progress. On outage, tear down both
+  // (mirroring doExitChat / doExitPreview: drop the blocking ref, close the
+  // panel, end the backend session, and unwind the history entry that was pushed
+  // when the panel opened) so the user returns to the Code View file browser.
+  const customizePhase = getCustomizeState(projectId).phase;
+  const previewPhase = getPreviewState(projectId).phase;
+  const customizeActive = ['preparing', 'executing', 'building', 'build_fixing', 'saving'].includes(customizePhase);
+  // 'ready' (the iframe still depends on the backend gateway) and 'error' (a
+  // dropped socket flips preview to 'error') are both included so the watch keeps
+  // running through them; the health check decides whether a drop is a backend
+  // outage (modal) or a live-backend preview error (the Try Again screen).
+  const previewActive = ['preparing', 'installing', 'starting', 'ready', 'error'].includes(previewPhase);
+
+  const confirmPopupOpen = exitPopupOpen || exitPreviewPopupOpen;
+
+  const { outageGate } = useBackendWatch({
+    active: !!projectId && (customizeActive || previewActive || confirmPopupOpen),
+    service: 'customize',
+    deferred: confirmPopupOpen,
+    recheckSignal: customizePhase === 'error' || previewPhase === 'error',
+    onRecover: () => {
+      if (!projectId) return;
+      // Close whichever panel is open and unwind the Back-button history entry it
+      // pushed when it opened.
+      if (previewOpen) {
+        previewBlockingRef.current = false;
+        setPreviewOpen(false);
+        window.history.back();
+      }
+      if (chatOpen) {
+        chatBlockingRef.current = false;
+        setChatOpen(false);
+        window.history.back();
+      }
+      // Dismiss whichever confirmation popup the outage was flushed from.
+      setExitPopupOpen(false);
+      setExitPreviewPopupOpen(false);
+      // Always tear down the dead backend session for whichever op was running —
+      // even if its panel was already closed (e.g. customize mid-save) — so the
+      // watch can't stay armed on a stuck 'active' state after the modal closes.
+      if (previewActive || previewOpen) stopPreview(projectId);
+      if (customizeActive || chatOpen) closeCustomize(projectId);
+    },
+  });
+
   async function handleOpenChat(selection?: BranchSelection) {
     if (savingProject) return;
 
     resetCustomize(projectId);
 
     try {
-      const body: Record<string, any> = {
+      const body: Record<string, unknown> = {
         project_id: projectId,
         project_name: projectName || repo || 'Project',
         project_type: projectType,
@@ -229,7 +277,7 @@ function RepositoryBrowserContent() {
     if (previewStartingRef.current || previewOpen) return;
     previewStartingRef.current = true;
     try {
-      const body: Record<string, any> = {
+      const body: Record<string, unknown> = {
         project_id: projectId,
         project_name: projectName || repo || 'Project',
         project_type: projectType,
@@ -295,12 +343,14 @@ function RepositoryBrowserContent() {
 
   useEffect(() => {
     checkAuth();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount
   }, []);
 
   useEffect(() => {
     if (!authLoading && !isLocal && owner && repo) {
       fetchBranches();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- depends only on the listed auth/repo inputs
   }, [owner, repo, authLoading, isLocal]);
 
   useEffect(() => {
@@ -314,6 +364,7 @@ function RepositoryBrowserContent() {
         fetchContents();
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fetch helpers are stable; effect keys off the listed inputs
   }, [owner, repo, projectId, currentPath, authLoading, isLocal, currentBranch]);
 
   async function checkAuth() {
@@ -404,8 +455,8 @@ function RepositoryBrowserContent() {
 
       const data = await res.json();
       setContents(data.contents || []);
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err) {
+      setError(getErrorMessage(err));
     } finally {
       setLoading(false);
       setPageReady(true);
@@ -427,8 +478,8 @@ function RepositoryBrowserContent() {
 
         const data = await res.json();
         setFileContent(data.content);
-      } catch (err: any) {
-        setError(err.message);
+      } catch (err) {
+        setError(getErrorMessage(err));
       } finally {
         setLoading(false);
       }
@@ -463,8 +514,8 @@ function RepositoryBrowserContent() {
       }
 
       await fetchContents();
-    } catch (err: any) {
-      showPopup({ type: 'error', message: err.message });
+    } catch (err) {
+      showPopup({ type: 'error', message: getErrorMessage(err) });
     } finally {
       setRefreshing(false);
     }
@@ -867,7 +918,10 @@ function RepositoryBrowserContent() {
       )}
 
       {exitPreviewPopupOpen && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center animate-[fadeIn_150ms_ease-out]">
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center animate-[fadeIn_150ms_ease-out]"
+          onClickCapture={outageGate}
+        >
           <div
             className="absolute inset-0 bg-black/50 backdrop-blur-sm"
             onClick={() => setExitPreviewPopupOpen(false)}
@@ -909,7 +963,10 @@ function RepositoryBrowserContent() {
       )}
 
       {exitPopupOpen && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center animate-[fadeIn_150ms_ease-out]">
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center animate-[fadeIn_150ms_ease-out]"
+          onClickCapture={outageGate}
+        >
           <div
             className="absolute inset-0 bg-black/50 backdrop-blur-sm"
             onClick={() => setExitPopupOpen(false)}

@@ -1,8 +1,12 @@
 import { NextResponse } from 'next/server';
+import { requireAuth } from '@/lib/auth';
 import { DEPLOY_URL, deployHeaders, logDeployError } from '@/lib/deploy';
 
 export async function GET() {
   try {
+    const { error } = await requireAuth();
+    if (error) return error;
+
     const response = await fetch(`${DEPLOY_URL}/health`, {
       headers: deployHeaders(),
     });

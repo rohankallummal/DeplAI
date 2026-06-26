@@ -1,13 +1,13 @@
 import { NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/auth';
-import { query } from '@/lib/db';
+import { query, type Row } from '@/lib/db';
 
 export async function GET() {
   try {
     const { user, error } = await requireAuth();
     if (error) return error;
 
-    const localProjects = await query<any[]>(
+    const localProjects = await query<Row[]>(
       `SELECT 
         id,
         name,
@@ -22,7 +22,7 @@ export async function GET() {
       [user.id]
     );
 
-    const githubRepos = await query<any[]>(
+    const githubRepos = await query<Row[]>(
       `SELECT 
         r.id,
         r.full_name,
@@ -82,7 +82,7 @@ export async function GET() {
         totalCount: allProjects.length,
       },
     });
-  } catch (error: any) {
+  } catch (error) {
     console.error('Error fetching projects:', error);
     return NextResponse.json(
       { error: 'Failed to fetch projects' },

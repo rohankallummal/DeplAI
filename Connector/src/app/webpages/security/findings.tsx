@@ -9,6 +9,7 @@ import waitAnimation from '@/components/animation/wait.json';
 import waitDarkAnimation from '@/components/animation/wait-dark.json';
 import runAnimation from '@/components/animation/run.json';
 import aiThinkAnimation from '@/components/animation/ai-think.json';
+import alertAnimation from '@/components/animation/alert.json';
 import {
   useReactTable,
   getCoreRowModel,
@@ -483,6 +484,7 @@ function SupplyChainTable({ vulnerabilities }: { vulnerabilities: SupplyChainVul
     { id: 'severity', desc: false },
   ]);
 
+  // eslint-disable-next-line react-hooks/incompatible-library -- @tanstack/react-table's useReactTable is not React-Compiler-compatible
   const table = useReactTable({
     data: vulnerabilities,
     columns: supplyChainColumns,
@@ -750,6 +752,7 @@ export default function Findings({ projectId, remediating, onCleanScan, onFindin
     setLoading(true);
     fetchStatusAndResults(cancelled);
     return () => { cancelled.current = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-run only when projectId changes; fetch helpers are stable
   }, [projectId]);
 
   useEffect(() => {
@@ -761,12 +764,14 @@ export default function Findings({ projectId, remediating, onCleanScan, onFindin
     onFindingsReady?.(false);
     fetchStatusAndResults(cancelled, { trackError: true, afterScanComplete: true });
     return () => { cancelled.current = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on projectId+state; fetch helper is stable
   }, [projectId, state]);
 
   useEffect(() => {
     if (!loading && !loadingResults) {
       onLoaded?.();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- onLoaded is a stable callback prop
   }, [loading, loadingResults]);
 
   const rafIdRef = useRef<number | null>(null);
@@ -902,10 +907,8 @@ export default function Findings({ projectId, remediating, onCleanScan, onFindin
   if (error) {
     return (
       <div className="bg-red-500/5 rounded-2xl border border-red-500/20 p-12 h-full flex flex-col items-center justify-center min-h-[400px]">
-        <div className="w-16 h-16 bg-red-500/10 rounded-full flex items-center justify-center mb-4 border border-red-500/20">
-          <svg className="w-8 h-8 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-          </svg>
+        <div className="w-28 h-28 mb-4">
+          <Lottie animationData={alertAnimation} loop />
         </div>
         <h3 className="text-xl font-semibold text-foreground mb-2">Scan Failed</h3>
         <p className="text-red-400 text-sm bg-red-500/10 px-4 py-2 rounded-md">{error}</p>

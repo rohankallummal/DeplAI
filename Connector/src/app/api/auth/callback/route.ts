@@ -29,14 +29,18 @@ export async function GET(request: NextRequest) {
 
     const accessToken = tokenData.access_token;
 
+    if (!accessToken) {
+      return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/?error=token_error`);
+    }
+
     const [githubUser, emails] = await Promise.all([
       fetchGitHub('/user', accessToken).then(r => r.json()),
       fetchGitHub('/user/emails', accessToken).then(r => r.json()),
     ]);
 
-    const primaryEmail = emails.find((e: any) => e.primary)?.email || emails[0]?.email;
+    const primaryEmail = emails.find((e: { email: string; primary: boolean }) => e.primary)?.email || emails[0]?.email;
 
-    let [user] = await query<any[]>(
+    let [user] = await query<{ id: string }[]>(
       'SELECT id FROM users WHERE email = ?',
       [primaryEmail]
     );

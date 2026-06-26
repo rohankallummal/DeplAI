@@ -40,7 +40,7 @@ export async function POST(request: NextRequest) {
 
     const data = await response.json();
     return NextResponse.json(data);
-  } catch (err: any) {
+  } catch (err) {
     logDeployError('Deploy destroy', err);
     if (isConnectionRefused(err)) return deployUnavailableResponse();
     return NextResponse.json(
