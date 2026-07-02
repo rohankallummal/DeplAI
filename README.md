@@ -8,7 +8,7 @@ The original DeplAI served as the foundational framework for this project, provi
 
 DeplAI aims to replicate and automate security validation processes that were traditionally performed manually using Abhaya. By leveraging agentic AI, the platform performs tasks that previously required dedicated security engineers operating standalone penetration testing tools.
 
-> This repository contains the **Pilot Version** of the DeplAI platform.
+> Disclaimer: This repository contains the **Pilot Version** of DeplAI. It is intended for evaluation, experimentation, and development.
 
 ---
 
@@ -383,6 +383,10 @@ Once authentication is successful, the Connector is ready to communicate with th
 ## Section 2: Subsequent Runs
 
 ```bash
+ngrok http 3000
+```
+
+```bash
 cd Connector
 npm run dev
 ```
@@ -417,7 +421,3 @@ docker-compose up --build
 ```
 
 ---
-
-# Disclaimer
-
-This repository contains the **Pilot Version** of DeplAI and is intended for evaluation, experimentation, and continued development. Features, APIs, workflows, and infrastructure may change as the platform evolves.

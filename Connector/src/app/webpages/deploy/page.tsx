@@ -10,6 +10,7 @@ import { CostEstimation } from '@/components/cost-estimation';
 import { PostDeploymentDashboard } from '@/components/post-deployment-dashboard';
 import { useDeploy, type CostData, ACTIVE_PHASES } from '@/lib/deploy-context';
 import { useBackendWatch } from '@/lib/backend-monitor-context';
+import { usePopup } from '@/components/toast-notification';
 import DeployQACard from '@/components/deploy-qa-card';
 import loading3d1Animation from '@/components/animation/loading-3d-1.json';
 import loading3d2Animation from '@/components/animation/loading-3d-2.json';
@@ -30,6 +31,7 @@ function DeployPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const projectId = searchParams.get('project_id');
+  const { showPopup } = usePopup();
 
   const [loading, setLoading] = useState(true);
   const [projectInfo, setProjectInfo] = useState<{
@@ -157,7 +159,11 @@ function DeployPageContent() {
         }),
       });
 
-      if (!res.ok) return;
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        showPopup({ type: 'error', message: data.error || 'Could not start deployment. Please try again.' });
+        return;
+      }
 
       await startDeploy(projectId, projectInfo.name);
     } catch (err) {
