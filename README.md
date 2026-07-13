@@ -14,13 +14,15 @@ DeplAI aims to replicate and automate security validation processes that were tr
 
 # Tech Stack
 
-| Frontend | Backend | Infrastructure & DevOps | Data & Integration |
-| --- | --- | --- | --- |
-| Next.js | Python | Docker | MySQL |
-| React | FastAPI | AWS | GitHub |
-| TypeScript | Claude Code/Agent SDK | Terraform | |
-| Tailwind CSS | | Nginx | |
-| | | WebSockets | |
+| Frontend | Backend | AI & Agents | Infrastructure & DevOps | Data & Integration |
+| --- | --- | --- | --- | --- |
+| Next.js (App Router) | Python 3.12 | Claude — Agent SDK & Claude Code CLI | Docker & Docker Compose | MySQL |
+| React 19 | FastAPI | Model Context Protocol (MCP) | AWS (S3, IAM) | GitHub App |
+| TypeScript | Uvicorn (ASGI) | Firecrawl (web research) | Terraform | Octokit |
+| Tailwind CSS 4 | WebSockets | | Nginx | Anthropic API |
+| Framer Motion / GSAP / OGL | Pydantic v2 | | Ngrok | Firecrawl API |
+| iron-session | Docker SDK | | Bearer · Syft · Grype | Infracost API |
+| | WeasyPrint / Jinja2 | | Infracost · AWS CLI v2 | |
 
 ---
 
